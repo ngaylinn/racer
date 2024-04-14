@@ -14,14 +14,14 @@ def select(fitness_scores, count):
     sample_offset = np.random.random() * sample_period
     sample_points = [sample_offset + i * sample_period for i in range(count)]
 
-    result = []
-    index = -1
+    result = np.empty(count, dtype=np.int32)
+    population_index = -1
     fitness_so_far = 0.0
-    for sample in sample_points:
+    for sample_index, sample in enumerate(sample_points):
         while sample > fitness_so_far:
-            index += 1
-            fitness_so_far += fitness_scores[index]
-        result.append(index)
+            population_index += 1
+            fitness_so_far += fitness_scores[population_index]
+        result[sample_index] = population_index
     return result
 
 
@@ -60,7 +60,8 @@ class Speedy(FitnessEvaluator):
             hits[w] += objects[w, o].hits
             dist[w] += objects[w, o].dist
         for w in range(self.num_worlds):
-            self.scores[w] = dist[w] / (1 + hits[w])
+            score = dist[w] / (1 + hits[w])
+            self.scores[w] = ti.select(ti.math.isnan(score), 0.0, score)
 
     def score_all(self, simulator):
         self.score_all_kernel(simulator.objects)

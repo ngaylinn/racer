@@ -10,8 +10,9 @@ import constants as c
 
 FRAME_RATE = 24
 
-def __render_topo(gui, simulator):
-    gui.set_image(simulator.topo)
+def __render_topography(gui, simulator):
+    # TODO: Optimize?
+    gui.set_image(simulator.topographies.to_numpy()[0])
 
 
 def __draw_x(gui, pos, color):
@@ -52,7 +53,7 @@ def __render_objects(gui, simulator):
 
 
 def __simulate_and_render_step(gui, simulator, debug=False):
-    __render_topo(gui, simulator)
+    __render_topography(gui, simulator)
     simulator.view_and_react()
     if debug:
         __render_debug(gui, simulator)

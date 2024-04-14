@@ -9,7 +9,7 @@ from object import Object
 class Simulator:
     def __init__(self, num_worlds=1):
         self.num_worlds = num_worlds
-        self.topo = ti.field(float, shape=c.WORLD_SHAPE)
+        self.topographies = ti.field(float, shape=(num_worlds,) + c.WORLD_SHAPE)
         self.objects = Object.field(shape=(num_worlds, c.NUM_OBJECTS))
         self.__objects = Object.field(shape=(num_worlds, c.NUM_OBJECTS))
         self.agents = agent.Agent.field(shape=(num_worlds, c.NUM_OBJECTS))
@@ -37,14 +37,22 @@ class Simulator:
         return (from_vec.dot(onto_vec) / onto_vec.dot(onto_vec)) * onto_vec
 
     @ti.func
-    def acc_from_topo(self, pos):
+    def topo_index(self, pos: ti.math.vec2, offset: int):
+        max_x, max_y = c.WORLD_SHAPE - ti.Vector([1, 1])
+        return ti.math.ivec2(
+            ti.math.clamp(int(pos.x * max_x), offset, max_x - offset),
+            ti.math.clamp(int(pos.y * max_y), offset, max_y - offset))
+
+    @ti.func
+    def acc_from_topography(self, w, pos):
         x, y = self.topo_index(pos, 1)
         force = ti.math.vec2(0.0, 0.0)
         # To estimate the normal at cell (x, y), look at the neighboring cells and
         # average their contributions to this vector.
         for x_from in range(x - 1, x + 2):
             for y_from in range(y - 1, y + 2):
-                z_delta = self.topo[x_from, y_from] - self.topo[x, y]
+                z_delta = (self.topographies[w, x_from, y_from] -
+                           self.topographies[w, x, y])
                 x_delta = (x_from - x) / c.WORLD_SIZE
                 y_delta = (y_from - y) / c.WORLD_SIZE
                 # Note at the sample position, this vector is 0, 0, 0, so it does
@@ -72,7 +80,7 @@ class Simulator:
 
             # Record the force acting on the object based on the incline of the
             # topography at its current position.
-            acc = self.acc_from_topo(objects[w, o1].pos)
+            acc = self.acc_from_topography(w, objects[w, o1].pos)
             self.views[w, o1][agent.SLP_X] = acc.x
             self.views[w, o1][agent.SLP_Y] = acc.y
 
@@ -110,13 +118,6 @@ class Simulator:
             objects[w, o1].acc.x = acc.x + 1.2 * reaction[agent.ACC_X]
             objects[w, o1].acc.y = acc.y + 1.2 * reaction[agent.ACC_Y]
             objects[w, o1].rad = reaction[agent.RAD]
-
-    @ti.func
-    def topo_index(self, pos: ti.math.vec2, offset: int):
-        max_x, max_y = c.WORLD_SHAPE
-        return ti.math.ivec2(
-            ti.math.clamp(int(pos.x * max_x), offset, max_x - offset),
-            ti.math.clamp(int(pos.y * max_y), offset, max_y - offset))
 
     def view_and_react(self):
         self.__update_averages(self.objects)
