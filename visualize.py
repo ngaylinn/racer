@@ -61,7 +61,7 @@ def __simulate_and_render_step(gui, simulator, debug=False):
     __render_objects(gui, simulator)
 
 
-def show(simulator, evaluator, debug=False):
+def show(simulator, debug=False):
     gui = ti.GUI('MicRoboBiome', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=True)
     step = 0
@@ -70,15 +70,16 @@ def show(simulator, evaluator, debug=False):
             simulator.randomize_objects()
         __simulate_and_render_step(gui, simulator, debug)
         step = (step + 1) % c.NUM_STEPS
-        if step == c.NUM_STEPS - 1:
-            evaluator.score_one(simulator)
-            evaluator.visualize(gui)
+        # TODO: Maybe restore?
+        # if step == c.NUM_STEPS - 1:
+        #     evaluator.score_one(simulator)
+        #     evaluator.visualize(gui)
         gui.show()
         if step == c.NUM_STEPS - 1:
             time.sleep(2.0)
 
 
-def save(simulator, evaluator, filename, debug=False, progress=None):
+def save(simulator, filename, debug=False, progress=None):
     gui = ti.GUI('MicRoboBiome', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=False)
     video_manager = ti.tools.VideoManager(
@@ -100,15 +101,16 @@ def save(simulator, evaluator, filename, debug=False, progress=None):
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             video_manager.write_frame(gui.get_image())
-        evaluator.score_one(simulator)
-        evaluator.visualize(gui)
+        # TODO: Maybe restore?
+        # evaluator.score_one(simulator)
+        # evaluator.visualize(gui)
         progress.update()
     video_manager.make_video(gif=False, mp4=True)
     shutil.copyfile(video_manager.get_output_filename('.mp4'), filename)
 
 
-def save_batch(simulator, evaluator, filename, batch_size, debug=False):
+def save_batch(simulator, filename, batch_size, debug=False):
     progress = trange(batch_size * (c.NUM_STEPS + 2*FRAME_RATE))
     progress.set_description('Making Videos')
     for i in range(batch_size):
-        save(simulator, evaluator, filename.format(i=i), debug, progress)
+        save(simulator, filename.format(i=i), debug, progress)
