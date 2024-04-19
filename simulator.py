@@ -12,7 +12,8 @@ class Simulator:
         self.topographies = ti.field(float, shape=(num_worlds,) + c.WORLD_SHAPE)
         self.objects = Object.field(shape=(num_worlds, c.NUM_OBJECTS))
         self.__objects = Object.field(shape=(num_worlds, c.NUM_OBJECTS))
-        self.agents = agent.Agent.field(shape=(num_worlds, c.NUM_OBJECTS))
+        #self.agents = agent.Agent.field(shape=(num_worlds, c.NUM_OBJECTS))
+        self.controllers = None
         # These are only fields so we can visualize them for debugging,
         # otherwise they could just be computed on the fly and thrown away.
         self.avg_pos = ti.math.vec2.field(shape=(num_worlds))
@@ -114,7 +115,8 @@ class Simulator:
             self.views[w, o1][agent.AVG_POS_Y] = rel_pos.y
 
             # Let this agent react to the view we just computed.
-            reaction = self.agents[w, o1].react(self.views[w, o1])
+            #reaction = self.agents[w, o1].react(self.views[w, o1])
+            reaction = self.controllers.activate(self.views[w, o1], w, o1)
             objects[w, o1].acc.x = acc.x + 1.2 * reaction[agent.ACC_X]
             objects[w, o1].acc.y = acc.y + 1.2 * reaction[agent.ACC_Y]
             objects[w, o1].rad = reaction[agent.RAD]

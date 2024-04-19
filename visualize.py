@@ -62,7 +62,7 @@ def __simulate_and_render_step(gui, simulator, debug=False):
 
 
 def show(simulator, debug=False):
-    gui = ti.GUI('MicRoboBiome', c.WORLD_SHAPE,
+    gui = ti.GUI('Racer', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=True)
     step = 0
     while gui.running:
@@ -80,7 +80,7 @@ def show(simulator, debug=False):
 
 
 def save(simulator, filename, debug=False, progress=None):
-    gui = ti.GUI('MicRoboBiome', c.WORLD_SHAPE,
+    gui = ti.GUI('Racer', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=False)
     video_manager = ti.tools.VideoManager(
         output_dir='output', framerate=FRAME_RATE, automatic_build=False)

@@ -5,17 +5,15 @@ import taichi as ti
 from tqdm import trange
 
 import agent
-from coevolve import Domain, CoOptimizer, coevolve
+from coevolve import Domain, CoOptimizer, coevolve, pair_select
 import constants as c
 import fitness
 from simulator import Simulator
 import visualize
 
-ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32, random_seed=42,
+ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
         debug=False)
 
-NUM_INDIVIDUALS = 50
-NUM_WORLDS = NUM_INDIVIDUALS * c.NUM_TRIALS
 
 # Make sure all pairings of parents with mates put the most fit individual in
 # the "parent" role. This tells the Neat algorithm to take excess genes from
@@ -46,14 +44,14 @@ def prioritize_fittest(parents, mates, fitness):
 # def evolve(evaluator):
 #     print(
 #         f'Evolving {NUM_INDIVIDUALS} controllers and topography generators,\n'
-#         f'with {c.NUM_TRIALS} trials each ({NUM_WORLDS} parallel simulations)')
+#         f'with {c.NUM_TRIALS} trials each ({c.NUM_WORLDS} parallel simulations)')
 #     # TODO: Restore
 #     # agents = agent.randomize(NUM_INDIVIDUALS)
 #     agents = np.zeros(NUM_INDIVIDUALS, dtype=agent.AGENT_DTYPE)
 #     neat = Neat(num_inputs=2, num_outputs=1, num_individuals=NUM_INDIVIDUALS,
 #                 num_repeats=c.NUM_TRIALS)
 #     topo_generators = neat.random_population()
-#     simulator = Simulator(NUM_WORLDS)
+#     simulator = Simulator(c.NUM_WORLDS)
 #     score = 0
 #     progress = trange(c.NUM_GENERATIONS)
 #     for generation in progress:
@@ -93,14 +91,17 @@ def prioritize_fittest(parents, mates, fitness):
 #     return (agents[best_index].astype(agent.AGENT_DTYPE),
 #             topo_generators.render_one(best_index, c.WORLD_SHAPE))
 # 
-# @ti.kernel
-# def render_fixed_topology(topo: ti.template()):
-#     center = ti.math.vec2(256.0, 256.0)
-#     max_dist = ti.math.distance(ti.math.vec2(0.0, 0.0), center)
-#     for x, y in topo:
-#         dist = ti.math.distance((x, y), center) / max_dist
-#         # Draw a steep column in the center, surrounded by a shallow bowl.
-#         topo[x, y] = 1.0 - dist**2 # ti.select(dist < 0.1, 0.0, 1.0 - dist**2)
+@ti.kernel
+def render_fixed_topology(topo: ti.template()):
+    center = ti.math.vec2(256.0, 256.0)
+    max_dist = ti.math.distance(ti.math.vec2(0.0, 0.0), center)
+    for w, x, y in topo:
+        dist = ti.math.distance((x, y), center) / max_dist
+        # Draw a steep column in the center, surrounded by a shallow bowl.
+        topo[w, x, y] = 1.0 - dist**2 # ti.select(dist < 0.1, 0.0, 1.0 - dist**2)
+
+
+
 
 @ti.data_oriented
 class RacerDomain(Domain):
@@ -120,8 +121,10 @@ class RacerDomain(Domain):
     def evaluate(self, interactions):
         topo_generators, controllers = interactions
         self.simulator.randomize_objects()
+        #render_fixed_topology(self.simulator.topographies)
         topo_generators.render_all(self.simulator.topographies)
-        self.simulator.agents.from_numpy(controllers)
+        #self.simulator.agents.from_numpy(controllers)
+        self.simulator.controllers = controllers
         for _ in range(c.NUM_STEPS):
             self.simulator.step()
         self.summarize_simulation()
@@ -133,20 +136,31 @@ class RacerDomain(Domain):
 class RacerCoOptimizer(CoOptimizer):
     def __init__(self, name):
         self.name = name
-        self.topo_neat = Neat(num_inputs=2, num_outputs=1,
-                              num_individuals=NUM_INDIVIDUALS,
-                              num_repeats=c.NUM_TRIALS)
-        self.controllers = np.zeros(NUM_INDIVIDUALS, dtype=agent.AGENT_DTYPE)
-
-    @staticmethod
-    def get_matches(scores):
-        parent_selections = fitness.select(scores, NUM_INDIVIDUALS)
-        mate_selections = fitness.select(scores, NUM_INDIVIDUALS)
-        prioritize_fittest(parent_selections, mate_selections, scores)
-        return parent_selections, mate_selections
+        self.topography_neat = Neat(
+            num_inputs=2, num_outputs=1,
+            num_individuals=c.NUM_INDIVIDUALS, num_repeats=c.NUM_TRIALS)
+        # self.controllers = np.zeros(c.NUM_INDIVIDUALS, dtype=agent.AGENT_DTYPE)
+        self.controller_neat = Neat(
+            num_inputs=agent.NUM_INPUTS, num_outputs=agent.NUM_OUTPUTS,
+            num_individuals=c.NUM_INDIVIDUALS, num_repeats=c.NUM_TRIALS)
 
     def overall_score(self, metrics):
         return np.mean(metrics['dist'] / (1 + metrics['hits']))
+
+
+def fixed_world_assignments():
+    return np.tile(np.arange(c.NUM_INDIVIDUALS), c.NUM_TRIALS)
+
+def random_world_assignments():
+    return np.concatenate([
+        np.random.permutation(c.NUM_INDIVIDUALS)
+        for _ in range(c.NUM_TRIALS)])
+
+def reduce_fitness(fitness_scores, world_assignments):
+    result = np.zeros(c.NUM_INDIVIDUALS)
+    for score, i in zip(fitness_scores, world_assignments):
+        result[i] += score
+    return result / c.NUM_TRIALS
 
 
 class ConditionACoOptimizer(RacerCoOptimizer):
@@ -155,20 +169,22 @@ class ConditionACoOptimizer(RacerCoOptimizer):
 
     def get_interactions(self, scores=None):
         if scores is None:
-            topo_generators = self.topo_neat.random_population()
+            topo_generators = self.topography_neat.random_population()
+            controllers = self.controller_neat.random_population()
         else:
-            topo_generators = self.topo_neat.propagate(
-                *self.get_matches(scores['combined']))
+            matches = pair_select(scores['combined'])
+            topo_generators = self.topography_neat.propagate(matches)
+            controllers = self.controller_neat.propagate(matches)
+        world_assignments = fixed_world_assignments()
         return (topo_generators,
-                einops.repeat(
-                    self.controllers, 'i -> (i t) o',
-                    i=NUM_INDIVIDUALS, t=c.NUM_TRIALS, o=c.NUM_OBJECTS))
+                controllers.get_controllers(world_assignments, c.NUM_OBJECTS))
 
-    def score_interactions(self, metrics):
-        combined = metrics['dist'] / (1 + metrics['hits'])
-        combined = einops.reduce(
-            combined, '(i t) -> i', np.mean,
-            i=NUM_INDIVIDUALS, t=c.NUM_TRIALS)
+    def score_interactions(self, interactions, metrics):
+        _, controllers = interactions
+        world_assignments = controllers.world_assignments.to_numpy()
+        combined = reduce_fitness(
+            metrics['dist'] / (1 + metrics['hits']),
+            world_assignments)
         return {
             'combined': combined
         }
@@ -177,7 +193,7 @@ class ConditionACoOptimizer(RacerCoOptimizer):
         topo_generators, controllers = interactions
         best_index = np.argmax(scores['combined'])
         return (topo_generators.render_one(best_index, c.WORLD_SHAPE),
-                controllers[best_index][0])
+                controllers.get_one(best_index))
 
 
 class ConditionBCoOptimizer(RacerCoOptimizer):
@@ -188,10 +204,10 @@ class ConditionBCoOptimizer(RacerCoOptimizer):
 
     def get_interactions(self, scores=None):
         if scores is None:
-            topo_generators = self.topo_neat.random_population()
+            topo_generators = self.topography_neat.random_population()
         else:
-            topo_generators = self.topo_neat.propagate(
-                *self.get_matches(scores['topography']))
+            topo_generators = self.topography_neat.propagate(
+                pair_select(scores['topography']))
         return (topo_generators, self.controllers)
 
     def score_interactions(self, metrics):
@@ -212,15 +228,15 @@ class ConditionBCoOptimizer(RacerCoOptimizer):
         # indices?
         best_index = np.argmax(combined)
         return (topo_generators.render_one(best_index, c.WORLD_SHAPE),
-                controllers[best_index][0])
+                controllers.compile_one(best_index))
 
 
 def record_simulation(topography, controller, name):
     simulator = Simulator()
     simulator.topographies.from_numpy(
         einops.repeat(topography, 'w h -> 1 w h'))
-    simulator.agents.from_numpy(
-        einops.repeat(np.array([controller]), '1 -> 1 o', o=c.NUM_OBJECTS))
+    #render_fixed_topology(simulator.topographies)
+    simulator.controllers = controller
     visualize.show(simulator, debug=False)
     # visualize.save(simulator, f'output/{name}.mp4')
 
@@ -232,7 +248,7 @@ def summarize_results(history, name):
 
 def run_experiment(domain, cooptimizer):
     print(f'Running experiment {cooptimizer.name} '
-          f'with {NUM_WORLDS} parallel simulations:')
+          f'with {c.NUM_WORLDS} parallel simulations:')
     (best_topography, best_controller), history = coevolve(
         domain, cooptimizer, c.NUM_GENERATIONS)
     print('Summarizing results...')
@@ -242,7 +258,7 @@ def run_experiment(domain, cooptimizer):
 
 
 if __name__ == '__main__':
-    simulator = Simulator(NUM_WORLDS)
+    simulator = Simulator(c.NUM_WORLDS)
     domain = RacerDomain(simulator)
     run_experiment(domain, ConditionACoOptimizer())
     # run_experiment(domain, ConditionBCoOptimizer(1))
@@ -251,7 +267,7 @@ if __name__ == '__main__':
     exit()
 
     np.random.seed(42)
-    evaluator = fitness.Speedy(NUM_WORLDS)
+    evaluator = fitness.Speedy(c.NUM_WORLDS)
     # try:
     #     best_agent = np.load('controller.npy')
     #     best_topo = np.load('topography.npy')

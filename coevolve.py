@@ -4,6 +4,35 @@ import numpy as np
 import pandas as pd
 from tqdm import trange
 
+def select(fitness_scores, count=None):
+    if count is None:
+        count = len(fitness_scores)
+
+    total_fitness = sum(fitness_scores)
+    if total_fitness == 0:
+        return np.random.randint(0, len(fitness_scores), size=count)
+
+    sample_period = total_fitness / count
+    sample_offset = np.random.random() * sample_period
+    sample_points = [sample_offset + i * sample_period for i in range(count)]
+
+    result = np.empty(count, dtype=np.int32)
+    population_index = -1
+    fitness_so_far = 0.0
+    for sample_index, sample in enumerate(sample_points):
+        while sample > fitness_so_far:
+            population_index += 1
+            fitness_so_far += fitness_scores[population_index]
+        result[sample_index] = population_index
+    return result
+
+def pair_select(fitness_scores, count=None):
+    return np.array([
+        [p, m] if fitness_scores[p] > fitness_scores[m] else [m, p]
+        for p, m in zip(select(fitness_scores, count),
+                        select(fitness_scores, count))
+    ])
+
 class Domain(ABC):
     def __init__(self):
         self.metrics = []
@@ -32,7 +61,7 @@ class CoOptimizer(ABC):
         ...
 
     @abstractmethod
-    def best_interaction(self, scores):
+    def best_interaction(self, interactions, scores):
         ...
 
     # For a Domain...
@@ -48,7 +77,7 @@ def coevolve(domain, cooptimizer, num_iterations):
     for i in progress:
         progress.set_description(f'Score == {overall_score:4.2f}')
         metrics = domain.evaluate(interactions)
-        scores = cooptimizer.score_interactions(metrics)
+        scores = cooptimizer.score_interactions(interactions, metrics)
         overall_score = cooptimizer.overall_score(metrics)
         history.append(metrics | scores)
         if i + 1 < num_iterations:
