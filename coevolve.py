@@ -77,7 +77,7 @@ def coevolve(domain, cooptimizer, num_iterations):
     for i in progress:
         progress.set_description(f'Score == {overall_score:4.2f}')
         metrics = domain.evaluate(interactions)
-        scores = cooptimizer.score_interactions(interactions, metrics)
+        scores = cooptimizer.score_interactions(metrics)
         overall_score = cooptimizer.overall_score(metrics)
         history.append(metrics | scores)
         if i + 1 < num_iterations:

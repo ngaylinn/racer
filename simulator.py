@@ -59,7 +59,11 @@ class Simulator:
                 # Note at the sample position, this vector is 0, 0, 0, so it does
                 # not contribute to the normal and does not require special casing.
                 force += 10000 * ti.math.vec2(x_delta, y_delta) * z_delta
-        return force
+        # This is an approximate way of calculating acceleration due to an
+        # incline which doesn't handle sharp discontinuities well. So, put a
+        # clamp on it to prevent outrageous acceleration values.
+        # TODO: Is this a reasonable range?
+        return ti.math.clamp(force, -1.0, 1.0)
 
     @ti.kernel
     def __update_averages(self, objects: ti.template()):

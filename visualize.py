@@ -61,7 +61,7 @@ def __simulate_and_render_step(gui, simulator, debug=False):
     __render_objects(gui, simulator)
 
 
-def show(simulator, debug=False):
+def show(simulator, scores_func, debug=False):
     gui = ti.GUI('Racer', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=True)
     step = 0
@@ -70,10 +70,12 @@ def show(simulator, debug=False):
             simulator.randomize_objects()
         __simulate_and_render_step(gui, simulator, debug)
         step = (step + 1) % c.NUM_STEPS
-        # TODO: Maybe restore?
-        # if step == c.NUM_STEPS - 1:
-        #     evaluator.score_one(simulator)
-        #     evaluator.visualize(gui)
+        if step == c.NUM_STEPS - 1:
+            scores = scores_func(simulator)
+            for index, (name, values) in enumerate(scores.items()):
+                gui.text(f'{name}: {values[0]:0.3f}',
+                         (0, 1.0 - 0.1 * index),
+                         font_size=20, color=0xff00ff)
         gui.show()
         if step == c.NUM_STEPS - 1:
             time.sleep(2.0)
