@@ -60,8 +60,14 @@ def __simulate_and_render_step(gui, simulator, debug=False):
     simulator.update_objects()
     __render_objects(gui, simulator)
 
+def __render_scores(gui, scores):
+    for index, (name, values) in enumerate(scores.items()):
+        gui.text(f'{name}: {values[0]:0.3f}',
+                 (0, 1.0 - 0.05 * index),
+                 font_size=20, color=0xff00ff)
 
-def show(simulator, scores_func, debug=False):
+
+def show(simulator, get_scores, debug=False):
     gui = ti.GUI('Racer', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=True)
     step = 0
@@ -71,17 +77,13 @@ def show(simulator, scores_func, debug=False):
         __simulate_and_render_step(gui, simulator, debug)
         step = (step + 1) % c.NUM_STEPS
         if step == c.NUM_STEPS - 1:
-            scores = scores_func(simulator)
-            for index, (name, values) in enumerate(scores.items()):
-                gui.text(f'{name}: {values[0]:0.3f}',
-                         (0, 1.0 - 0.1 * index),
-                         font_size=20, color=0xff00ff)
+            __render_scores(gui, get_scores(simulator))
         gui.show()
         if step == c.NUM_STEPS - 1:
             time.sleep(2.0)
 
 
-def save(simulator, filename, debug=False, progress=None):
+def save(simulator, get_scores, filename, debug=False, progress=None):
     gui = ti.GUI('Racer', c.WORLD_SHAPE,
                  background_color=0xffffff, show_gui=False)
     video_manager = ti.tools.VideoManager(
@@ -103,9 +105,7 @@ def save(simulator, filename, debug=False, progress=None):
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             video_manager.write_frame(gui.get_image())
-        # TODO: Maybe restore?
-        # evaluator.score_one(simulator)
-        # evaluator.visualize(gui)
+        __render_scores(gui, get_scores(simulator))
         progress.update()
     video_manager.make_video(gif=False, mp4=True)
     shutil.copyfile(video_manager.get_output_filename('.mp4'), filename)

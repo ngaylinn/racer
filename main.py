@@ -105,10 +105,10 @@ def random_world_assignments():
         for _ in range(c.NUM_TRIALS)])
 
 def reduce_fitness(fitness_scores, world_assignments):
-    result = np.zeros(c.NUM_INDIVIDUALS)
-    for score, i in zip(fitness_scores, world_assignments):
-        result[i] += score
-    return result / c.NUM_TRIALS
+    scores = np.zeros(c.NUM_INDIVIDUALS)
+    for score, individual in zip(fitness_scores, world_assignments):
+        scores[individual] += score
+    return scores / c.NUM_TRIALS
 
 
 class ConditionACoOptimizer(RacerCoOptimizer):
@@ -116,31 +116,35 @@ class ConditionACoOptimizer(RacerCoOptimizer):
         super().__init__('condition_a')
 
     def get_interactions(self, scores=None):
-        self.world_assignments = fixed_world_assignments()
+        self.topography_world_assignments = random_world_assignments()
+        self.controller_world_assignments = random_world_assignments()
         if scores is None:
             self.topo_generators.update(
                 self.topography_neat.random_population(),
-                self.world_assignments)
+                self.topography_world_assignments)
             self.controllers.update(
                 self.controller_neat.random_population(),
-                self.world_assignments)
+                self.controller_world_assignments)
         else:
-            matches = pair_select(scores['combined'])
             self.topo_generators.update(
-                self.topography_neat.propagate(matches),
-                self.world_assignments)
+                self.topography_neat.propagate(
+                    pair_select(scores['topography'])),
+                self.topography_world_assignments)
             self.controllers.update(
-                self.controller_neat.propagate(matches),
-                self.world_assignments)
+                self.controller_neat.propagate(
+                    pair_select(scores['controller'])),
+                self.controller_world_assignments)
         return (self.topo_generators, self.controllers)
 
     def score_interactions(self, metrics):
-        combined = reduce_fitness(
-            metrics['dist'] / (1 + metrics['hits']),
-            self.world_assignments)
+        combined = metrics['dist'] / (1 + metrics['hits'])
         # self.topography_neat.curr_pop.print_all()
         # visualize_population(self.topo_generators, combined)
         return {
+            'topography': reduce_fitness(
+                combined, self.topography_world_assignments),
+            'controller': reduce_fitness(
+                combined, self.controller_world_assignments),
             'combined': combined
         }
 
@@ -158,35 +162,52 @@ class ConditionBCoOptimizer(RacerCoOptimizer):
         super().__init__(f'condition_b{case}')
 
     def get_interactions(self, scores=None):
+        self.topography_world_assignments = random_world_assignments()
+        self.controller_world_assignments = random_world_assignments()
         if scores is None:
-            topo_generators = self.topography_neat.random_population()
+            self.topo_generators.update(
+                self.topography_neat.random_population(),
+                self.topography_world_assignments)
+            self.controllers.update(
+                self.controller_neat.random_population(),
+                self.topography_world_assignments)
         else:
-            topo_generators = self.topography_neat.propagate(
-                pair_select(scores['topography']))
-        return (topo_generators, self.controllers)
+            self.topo_generators.update(
+                self.topography_neat.propagate(
+                    pair_select(scores['topography'])),
+                self.topography_world_assignments)
+            self.controllers.update(
+                self.controller_neat.propagate(
+                    pair_select(scores['controller'])),
+                self.topography_world_assignments)
+        return (self.topo_generators, self.controllers)
 
     def score_interactions(self, metrics):
-        # TODO: Handle all topography / controller pairings.
         dist = metrics['dist']
         inv_hits = 1 / (1 + metrics['hits'])
         return {
-            'topography': dist if self.case == 1 else inv_hits,
-            'controller': inv_hits if self.case == 1 else dist,
+            'topography': reduce_fitness(
+                dist if self.case == 1 else inv_hits,
+                self.topography_world_assignments),
+            'controller': reduce_fitness(
+                inv_hits if self.case == 1 else dist,
+                self.controller_world_assignments),
+            # Note, this hasn't been reduced! It's sized to the number of
+            # worlds, not the number of individuals, so that best_interaction
+            # can find the pairing with the highest combined score.
             'combined': dist * inv_hits
         }
 
     def best_interaction(self, interactions, scores):
         topo_generators, controllers = interactions
-        topo_scores, controller_scores = scores
-        combined = topo_scores * controller_scores
-        # TODO: What if the best controller and topography have different
-        # indices?
-        best_index = np.argmax(combined)
-        return (topo_generators.render_one(best_index, c.WORLD_SHAPE),
-                controllers.compile_one(best_index))
+        world_index = np.argmax(scores['combined'])
+        topography_index = self.topography_world_assignments[world_index]
+        controller_index = self.controller_world_assignments[world_index]
+        return (topo_generators.render_one(topography_index, c.WORLD_SHAPE),
+                controllers.get_one(controller_index))
 
 
-def record_simulation(topography, controller, optimizer):
+def record_simulation(topography, controller, optimizer, trial):
     def get_scores(simulator):
         metrics = RacerDomain(simulator).get_metrics()
         return optimizer.score_interactions(metrics)
@@ -196,11 +217,12 @@ def record_simulation(topography, controller, optimizer):
         einops.repeat(topography, 'w h -> 1 w h'))
     #render_fixed_topology(simulator.topographies)
     simulator.controllers = controller
-    visualize.show(simulator, get_scores, debug=False)
-    # visualize.save(simulator, f'output/{optimizer.name}.mp4')
+    # visualize.show(simulator, get_scores, debug=False)
+    visualize.save(
+        simulator, get_scores, f'output/{optimizer.name}_{trial}.mp4')
 
 
-def summarize_results(history, name):
+def summarize_results(history, optimizer, trial):
     # TODO: Generate charts and stuff.
     pass
 
@@ -208,11 +230,12 @@ def summarize_results(history, name):
 def run_experiment(domain, cooptimizer):
     print(f'Running experiment {cooptimizer.name} '
           f'with {c.NUM_WORLDS} parallel simulations:')
-    (best_topography, best_controller), history = coevolve(
-        domain, cooptimizer, c.NUM_GENERATIONS)
-    print('Summarizing results...')
-    record_simulation(best_topography, best_controller, cooptimizer)
-    summarize_results(history, cooptimizer.name)
+    for trial in range(5):
+        (best_topography, best_controller), history = coevolve(
+            domain, cooptimizer, c.NUM_GENERATIONS)
+        record_simulation(
+            best_topography, best_controller, cooptimizer, trial)
+        summarize_results(history, cooptimizer, trial)
     print('Done!\n')
 
 
@@ -220,8 +243,8 @@ if __name__ == '__main__':
     simulator = Simulator(c.NUM_WORLDS)
     domain = RacerDomain(simulator)
     run_experiment(domain, ConditionACoOptimizer())
-    # run_experiment(domain, ConditionBCoOptimizer(1))
-    # run_experiment(domain, ConditionBCoOptimizer(2))
+    run_experiment(domain, ConditionBCoOptimizer(1))
+    run_experiment(domain, ConditionBCoOptimizer(2))
 
     exit()
 
