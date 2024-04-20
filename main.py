@@ -170,7 +170,7 @@ class ConditionBCoOptimizer(RacerCoOptimizer):
                 self.topography_world_assignments)
             self.controllers.update(
                 self.controller_neat.random_population(),
-                self.topography_world_assignments)
+                self.controller_world_assignments)
         else:
             self.topo_generators.update(
                 self.topography_neat.propagate(
@@ -179,7 +179,7 @@ class ConditionBCoOptimizer(RacerCoOptimizer):
             self.controllers.update(
                 self.controller_neat.propagate(
                     pair_select(scores['controller'])),
-                self.topography_world_assignments)
+                self.controller_world_assignments)
         return (self.topo_generators, self.controllers)
 
     def score_interactions(self, metrics):
@@ -187,10 +187,10 @@ class ConditionBCoOptimizer(RacerCoOptimizer):
         inv_hits = 1 / (1 + metrics['hits'])
         return {
             'topography': reduce_fitness(
-                dist if self.case == 1 else inv_hits,
+                inv_hits if self.case == 1 else dist,
                 self.topography_world_assignments),
             'controller': reduce_fitness(
-                inv_hits if self.case == 1 else dist,
+                dist if self.case == 1 else inv_hits,
                 self.controller_world_assignments),
             # Note, this hasn't been reduced! It's sized to the number of
             # worlds, not the number of individuals, so that best_interaction
