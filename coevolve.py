@@ -1,8 +1,10 @@
-from abc import ABC, abstractmethod
-
+from neatchi import Neat, NeatControllers, NeatRenderers
 import numpy as np
-import pandas as pd
+import taichi as ti
 from tqdm import trange
+
+import agent
+import constants as c
 
 def select(fitness_scores, count=None):
     if count is None:
@@ -33,54 +35,121 @@ def pair_select(fitness_scores, count=None):
                         select(fitness_scores, count))
     ])
 
-class Domain(ABC):
-    def __init__(self):
-        self.metrics = []
+def fixed_world_assignments():
+    return np.tile(np.arange(c.NUM_INDIVIDUALS), c.NUM_MATCH_UPS)
 
-    @abstractmethod
-    def evaluate(self, interactions):
-        ...
+def random_world_assignments():
+    return np.concatenate([
+        np.random.permutation(c.NUM_INDIVIDUALS)
+        for _ in range(c.NUM_MATCH_UPS)])
 
-    # List of Metrics p_i = f(X_0 ... X_n) -> R
-    # 0 .. n : N roles in this domain.
-    # X_i is a set of entities playing role i (a population)
-    # A tuple (x_0 ... x_n) in X_0 x ... x X_n is an interaction
-    # R is the set of outcomes
+def reduce_fitness(fitness_scores, world_assignments):
+    scores = np.zeros(c.NUM_INDIVIDUALS)
+    for score, individual in zip(fitness_scores, world_assignments):
+        scores[individual] += score
+    return scores / c.NUM_MATCH_UPS
 
-class CoOptimizer(ABC):
-    @abstractmethod
-    def get_interactions(self, scores=None):
-        ...
 
-    @abstractmethod
-    def score_interactions(self, interactions, metrics):
-        ...
+@ti.kernel
+def render_fixed_topology(topo: ti.template()):
+    center = ti.math.vec2(256.0, 256.0)
+    max_dist = ti.math.distance(ti.math.vec2(0.0, 0.0), center)
+    for w, x, y in topo:
+        dist = ti.math.distance((x, y), center) / max_dist
+        topo[w, x, y] = 1.0 - dist**2
 
-    @abstractmethod
-    def overall_score(self, metrics):
-        ...
+@ti.data_oriented
+class PopulationManager:
+    roles = ['topography', 'controller']
+    def __init__(self, expt):
+        self.expt = expt
 
-    @abstractmethod
-    def best_interaction(self, interactions, scores):
-        ...
+        # Neat algorithms for evolving CPPNs for both roles
+        self.neat = {
+            'topography': Neat(
+                num_inputs=2, num_outputs=1,
+                num_individuals=c.NUM_INDIVIDUALS),
+            'controller': Neat(
+                num_inputs=agent.NUM_INPUTS, num_outputs=agent.NUM_OUTPUTS,
+                num_individuals=c.NUM_INDIVIDUALS)
+        }
 
-    # For a Domain...
-    # Generate candidate solutions (an interaction of entities from some subset of roles)
-    # Provide an ordering of candidates
+        # Assignments of CPPNs to simulated worlds.
+        self.world_assignments = {}
 
-def coevolve(domain, cooptimizer, num_iterations):
-    interactions = cooptimizer.get_interactions()
+        # Actuators for interfacing between the CPPNs and the simulation.
+        self.actuators = {
+            'topography': NeatRenderers(
+                num_worlds=c.NUM_WORLDS, num_rows=c.WORLD_SIZE),
+            'controller': NeatControllers(
+                num_worlds=c.NUM_WORLDS, num_activations=c.NUM_OBJECTS)
+        }
+
+    def populate_simulator(self, simulator):
+        self.actuators['topography'].render_all(simulator.topographies)
+        # render_fixed_topology(simulator.topographies)
+        simulator.controllers = self.actuators['controller']
+        simulator.randomize_objects()
+
+    def get_best_individuals(self, scores):
+        world_index = np.argmax(scores['overall'])
+        return (
+            self.actuators['topography'].render_one(
+                self.world_assignments['topography'][world_index],
+                c.WORLD_SHAPE),
+            self.actuators['controller'].get_one(
+                self.world_assignments['controller'][world_index]))
+
+    def update_actuators(self, role):
+        self.world_assignments[role] = random_world_assignments()
+        self.actuators[role].update(
+            self.neat[role].curr_pop, self.world_assignments[role])
+
+    def randomize(self):
+        for role in self.roles:
+            self.neat[role].random_population()
+            self.update_actuators(role)
+
+    def propagate(self, scores):
+        for role in self.roles:
+            selections = pair_select(scores[role])
+            self.neat[role].propagate(selections)
+            self.update_actuators(role)
+
+    def get_scores(self, metrics):
+        return get_scores(metrics, self.expt.fitness, self.world_assignments)
+
+roles = PopulationManager.roles
+
+def get_scores(metrics, fitness, world_assignments=None):
+    if world_assignments is None:
+        world_assignments = {role: [0] for role in roles}
+    assert len(world_assignments) == len(metrics)
+
+    scores = {
+        role: reduce_fitness(
+            fitness[role](metrics),
+            world_assignments[role])
+        for role in roles
+    }
+    scores['overall'] = fitness['overall'](metrics)
+    return scores
+
+def coevolve(simulator, population_manager):
+    population_manager.randomize()
     history = []
 
-    progress = trange(num_iterations)
-    overall_score = 0.0
-    for i in progress:
-        progress.set_description(f'Score == {overall_score:4.2f}')
-        metrics = domain.evaluate(interactions)
-        scores = cooptimizer.score_interactions(metrics)
-        overall_score = cooptimizer.overall_score(metrics)
-        history.append(metrics | scores)
-        if i + 1 < num_iterations:
-            interactions = cooptimizer.get_interactions(scores)
-    return (cooptimizer.best_interaction(interactions, scores),
-            pd.DataFrame(history))
+    progress = trange(c.NUM_GENERATIONS)
+    scores = {'overall': np.zeros(1)}
+    for generation in progress:
+        progress.set_description(f'Score == {scores["overall"].mean():4.2f}')
+
+        population_manager.populate_simulator(simulator)
+        metrics = simulator.run()
+        scores = population_manager.get_scores(metrics)
+
+        history.append({'generation': generation} | metrics | scores)
+        if generation + 1 < c.NUM_GENERATIONS:
+            population_manager.propagate(scores)
+
+    return (population_manager.get_best_individuals(scores), history)

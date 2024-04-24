@@ -19,6 +19,8 @@ class Simulator:
         self.avg_pos = ti.math.vec2.field(shape=(num_worlds))
         self.avg_vel = ti.math.vec2.field(shape=(num_worlds))
         self.views = agent.View.field(shape=(num_worlds, c.NUM_OBJECTS))
+        self.reactions = agent.Reaction.field(
+            shape=(num_worlds, c.NUM_OBJECTS))
 
     def randomize_objects(self):
         shape = (self.num_worlds, c.NUM_OBJECTS)
@@ -32,6 +34,9 @@ class Simulator:
         self.objects.rad.fill(0.0)
         self.objects.hits.fill(0)
         self.objects.dist.fill(0.0)
+        # To calculate displacement, we peek at the velocity values from the
+        # objects in the previous step, so initialize to 0.0.
+        self.__objects.vel.fill(0.0)
 
     @ti.func
     def project_vec(from_vec, onto_vec):
@@ -75,59 +80,64 @@ class Simulator:
             self.avg_vel[w] += obj.vel / c.NUM_OBJECTS
 
     @ti.kernel
-    def __update_views(self, objects: ti.template()):
+    def __update_views(self, objects: ti.template(), debug: bool):
         for w, o1 in ti.ndrange(self.num_worlds, c.NUM_OBJECTS):
+            object1 = objects[w, o1]
+            view = agent.View(0.0)
             # Record proprioception data (per object view inputs).
-            self.views[w, o1][agent.POS_X] = objects[w, o1].pos.x
-            self.views[w, o1][agent.POS_Y] = objects[w, o1].pos.y
-            self.views[w, o1][agent.VEL_X] = objects[w, o1].vel.x
-            self.views[w, o1][agent.VEL_Y] = objects[w, o1].vel.y
+            view[agent.POS_X] = object1.pos.x
+            view[agent.POS_Y] = object1.pos.y
+            view[agent.VEL_X] = object1.vel.x
+            view[agent.VEL_Y] = object1.vel.y
 
             # Record the force acting on the object based on the incline of the
             # topography at its current position.
-            acc = self.acc_from_topography(w, objects[w, o1].pos)
-            self.views[w, o1][agent.SLP_X] = acc.x
-            self.views[w, o1][agent.SLP_Y] = acc.y
+            acc = self.acc_from_topography(w, object1.pos)
+            view[agent.SLP_X] = acc.x
+            view[agent.SLP_Y] = acc.y
 
             # Zero out all the nearest view values, so we don't get historical
             # values hanging around because an object noved out of view.
-            self.views[w, o1][agent.NRST_POS_X] = 0.0
-            self.views[w, o1][agent.NRST_POS_Y] = 0.0
-            self.views[w, o1][agent.NRST_VEL_X] = 0.0
-            self.views[w, o1][agent.NRST_VEL_X] = 0.0
+            view[agent.NRST_POS_X] = 0.0
+            view[agent.NRST_POS_Y] = 0.0
+            view[agent.NRST_VEL_X] = 0.0
+            view[agent.NRST_VEL_X] = 0.0
 
             # Record the relative position and velocity of the nearest object.
             min_distance = ti.math.inf
             # TODO: Optimize?
             for o2 in range(c.NUM_OBJECTS):
                 if o1 != o2:
-                    distance = ti.math.distance(
-                        objects[w, o1].pos, objects[w, o2].pos)
+                    object2 = objects[w, o2]
+                    distance = ti.math.distance(object1.pos, object2.pos)
                     if distance < c.VIEW_RADIUS and distance < min_distance:
-                        rel_pos = objects[w, o2].pos - objects[w, o1].pos
-                        rel_vel = objects[w, o2].vel - objects[w, o1].vel
+                        rel_pos = object2.pos - object1.pos
+                        rel_vel = object2.vel - object1.vel
                         min_distance = distance
-                        self.views[w, o1][agent.NRST_POS_X] = rel_pos.x
-                        self.views[w, o1][agent.NRST_POS_Y] = rel_pos.y
-                        self.views[w, o1][agent.NRST_VEL_X] = rel_vel.x
-                        self.views[w, o1][agent.NRST_VEL_X] = rel_vel.y
+                        view[agent.NRST_POS_X] = rel_pos.x
+                        view[agent.NRST_POS_Y] = rel_pos.y
+                        view[agent.NRST_VEL_X] = rel_vel.x
+                        view[agent.NRST_VEL_X] = rel_vel.y
 
             # Record relative positions to the centroid of all objects.
-            rel_pos = self.avg_pos[w] - objects[w, o1].pos
-            rel_vel = self.avg_vel[w] - objects[w, o1].vel
-            self.views[w, o1][agent.AVG_POS_X] = rel_pos.x
-            self.views[w, o1][agent.AVG_POS_Y] = rel_pos.y
+            rel_pos = self.avg_pos[w] - object1.pos
+            rel_vel = self.avg_vel[w] - object1.vel
+            view[agent.AVG_POS_X] = rel_pos.x
+            view[agent.AVG_POS_Y] = rel_pos.y
 
             # Let this agent react to the view we just computed.
-            #reaction = self.agents[w, o1].react(self.views[w, o1])
-            reaction = self.controllers.activate(self.views[w, o1], w, o1)
-            objects[w, o1].acc.x = acc.x + 1.2 * reaction[agent.ACC_X]
-            objects[w, o1].acc.y = acc.y + 1.2 * reaction[agent.ACC_Y]
-            objects[w, o1].rad = reaction[agent.RAD]
+            reaction = self.controllers.activate(view, w, o1)
+            object1.acc.x = acc.x + 1.2 * reaction[agent.ACC_X]
+            object1.acc.y = acc.y + 1.2 * reaction[agent.ACC_Y]
+            object1.rad = reaction[agent.RAD]
 
-    def view_and_react(self):
+            objects[w, o1] = object1
+            self.views[w, o1] = view
+            self.reactions[w, o1] = reaction
+
+    def view_and_react(self, debug=False):
         self.__update_averages(self.objects)
-        self.__update_views(self.objects)
+        self.__update_views(self.objects, debug)
 
     @ti.func
     def wall_collide(self, objects: ti.template(), w, o):
@@ -153,10 +163,14 @@ class Simulator:
     @ti.func
     def object_collide(self, objects: ti.template(), w, o1):
         # Look at all other objects to see if they collide with this one.
+        # NOTE: This is a very simple collision detection and resolution
+        # algorithm. It's not very realistic, merely good enough for this
+        # experiment.
         # TODO: Optimize?
         for o2 in range(c.NUM_OBJECTS):
-            if o1 == o2:
-                break
+            # Only consider each pair of objects once. 
+            if o1 <= o2:
+                continue
             pos1, pos2 = objects[w, o1].pos, objects[w, o2].pos
             vec = pos1 - pos2
             distance = vec.norm()
@@ -181,7 +195,11 @@ class Simulator:
     def __update_objects(self, prev_objects: ti.template(),
                          next_objects: ti.template()):
         for w, o in ti.ndrange(self.num_worlds, c.NUM_OBJECTS):
-            next_objects[w, o] = prev_objects[w, o].next_state()
+            # Since we haven't updated this object in next_objects, it's still
+            # the object from the step before. Exploit this to get the previous
+            # velocity, which is used to calculate displacement.
+            prev_vel = next_objects[w, o].vel
+            next_objects[w, o] = prev_objects[w, o].next_state(prev_vel)
             self.wall_collide(next_objects, w, o)
             self.object_collide(next_objects, w, o)
 
@@ -189,6 +207,26 @@ class Simulator:
         self.__update_objects(self.objects, self.__objects)
         self.objects, self.__objects = self.__objects, self.objects
 
+    @ti.kernel
+    def get_metrics_kernel(self, dist: ti.template(), hits: ti.template()):
+        for w, o in ti.ndrange(*self.objects.shape):
+            dist[w] += self.objects[w, o].dist
+            hits[w] += self.objects[w, o].hits
+
+    def get_metrics(self):
+        dist = ti.field(float, self.num_worlds)
+        hits = ti.field(float, self.num_worlds)
+        self.get_metrics_kernel(dist, hits)
+        return {
+            'dist': np.nan_to_num(dist.to_numpy()),
+            'inv_hits': 1 / (1 + np.nan_to_num(hits.to_numpy()))
+        }
+
     def step(self):
         self.view_and_react()
         self.update_objects()
+
+    def run(self):
+        for _ in range(c.NUM_STEPS):
+            self.step()
+        return self.get_metrics()

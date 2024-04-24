@@ -28,9 +28,18 @@ class Object:
         return min_val + ((self.rad + 1) / 2) * val_range
 
     @ti.func
-    def next_state(self):
+    def next_state(self, prev_vel):
         new_pos = self.pos + c.DT * self.vel
-        new_dist = self.dist + ti.math.distance(self.pos, new_pos)
+        # Rather than simply summing up the displacement over the entire
+        # simulation, also take into account the direction of travel. This
+        # encourages traveling in a straight line, and considers reversing
+        # direction (ie, from a collision) to be a regression.
+        cos_theta = self.vel.normalized().dot(prev_vel.normalized())
+        # Sanity check the value of cos_theta.
+        # NOTE: Didn't use ti.math.clamp here because doing it this way ensures
+        # that a nan value (ie, velocity == 0) results in 1.0.
+        cos_theta = ti.max(ti.min(cos_theta, 1.0), -1.0)
+        new_dist = self.dist + cos_theta * ti.math.distance(self.pos, new_pos)
         drag = 100 * (self.vel ** 2) * (self.radius() ** 2)
         new_vel = (1 - c.VISCOSITY) * self.vel + c.DT * (self.acc - drag)
         return Object(new_pos, new_vel, 0.0, self.rad, self.hits, new_dist)

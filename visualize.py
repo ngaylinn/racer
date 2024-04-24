@@ -37,9 +37,9 @@ def __render_debug(gui, simulator):
         gui.arrow(simulator.objects[0, o].pos, direction, color=0x0000ff)
 
         # Also draw an arrow indicating this object's intended direction.
-        gui.arrow(simulator.objects[0, o].pos,
-                  simulator.agents[0, o].heading(),
-                  color=0xff00ff)
+        direction = ti.math.vec2([simulator.reactions[0, o][agent.ACC_X],
+                                  simulator.reactions[0, o][agent.ACC_Y]])
+        gui.arrow(simulator.objects[0, o].pos, direction, color=0xff00ff)
 
     # Draw a centroid for each kind of object.
     __draw_x(gui, simulator.avg_pos[0], 0x0000ff)
@@ -54,13 +54,17 @@ def __render_objects(gui, simulator):
 
 def __simulate_and_render_step(gui, simulator, debug=False):
     __render_topography(gui, simulator)
-    simulator.view_and_react()
+    simulator.view_and_react(debug=True)
     if debug:
         __render_debug(gui, simulator)
     simulator.update_objects()
     __render_objects(gui, simulator)
 
-def __render_scores(gui, scores):
+def __render_data(gui, metrics, scores):
+    for index, (name, values) in enumerate(metrics.items()):
+        gui.text(f'{name}: {values[0]:0.3f}',
+                 (0.5, 1.0 - 0.05 * index),
+                 font_size=20, color=0xff00ff)
     for index, (name, values) in enumerate(scores.items()):
         gui.text(f'{name}: {values[0]:0.3f}',
                  (0, 1.0 - 0.05 * index),
@@ -77,7 +81,8 @@ def show(simulator, get_scores, debug=False):
         __simulate_and_render_step(gui, simulator, debug)
         step = (step + 1) % c.NUM_STEPS
         if step == c.NUM_STEPS - 1:
-            __render_scores(gui, get_scores(simulator))
+            metrics = simulator.get_metrics()
+            __render_data(gui, metrics, get_scores(metrics))
         gui.show()
         if step == c.NUM_STEPS - 1:
             time.sleep(2.0)
@@ -105,7 +110,8 @@ def save(simulator, get_scores, filename, debug=False, progress=None):
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             video_manager.write_frame(gui.get_image())
-        __render_scores(gui, get_scores(simulator))
+        metrics = simulator.get_metrics()
+        __render_data(gui, metrics, get_scores(metrics))
         progress.update()
     video_manager.make_video(gif=False, mp4=True)
     shutil.copyfile(video_manager.get_output_filename('.mp4'), filename)
