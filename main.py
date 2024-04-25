@@ -38,7 +38,7 @@ def visualize_single_experiment(experiment):
     fig = sns.relplot(data=one_experiment_data, x='generation', y='score',
                       hue='role', kind='line')
     fig.set(title=experiment.name)
-    fig.savefig(f'output/{experiment.name}.png')
+    fig.savefig(f'output/chart_{experiment.name}.png')
     plt.close()
 
 def load_all_experiments_data():
@@ -57,21 +57,21 @@ def visualize_all_experiments():
     fig = sns.relplot(data=all_experiments_data, x='generation', y='score',
                       hue='experiment', kind='line')
     fig.set(title='Overall scores across experiments')
-    fig.savefig('output/overall.png')
+    fig.savefig('output/chart_overall.png')
     plt.close()
 
 class Experiment:
     def __init__(self, name, fitness):
         self.name = name
         self.fitness = {
-            'overall': lambda metrics: metrics['dist'] * metrics['inv_hits']
+            'overall': go_forward_and_dont_crash
         } | fitness
 
     def video_path(self, trial):
-        return Path(f'output/{self.name}_{trial}.mp4')
+        return Path(f'output/video_{self.name}_{trial}.mp4')
 
     def history_path(self, trial):
-        return Path(f'output/{self.name}_{trial}.csv')
+        return Path(f'output/history_{self.name}_{trial}.csv')
 
     def run(self):
         print(f'Running {c.NUM_TRIALS} trials of {self.name} '
@@ -106,6 +106,8 @@ class Experiment:
 
     def record_simulation(self, topography, controller, trial):
         simulator = Simulator()
+        # TODO: It's problematic to duplicate this between here and
+        # coevolve.PopulationManager, so maybe find a way to share.
         simulator.topographies.from_numpy(
             einops.repeat(topography, 'w h -> 1 w h'))
         # render_fixed_topology(simulator.topographies)
@@ -119,22 +121,50 @@ class Experiment:
             functools.partial(get_scores, fitness=self.fitness),
             self.video_path(trial))
 
+def go_forward(metrics):
+    # Including the angular displacement term seems to evovle circulating
+    # behavior in a simple, fixed environment, but when the topography
+    # coevolves with the controllers, what you tend to get is gentle slopes
+    # with agents that mostly just passively roll. Perhaps this is because
+    # angular displacement is disrupted by collisions, which are unpredictable
+    # and hard to manage. On the other hand, since this fitness function
+    # correlates with collisions, it produces better coevolutionary dynamics,
+    # since the two populations have complementary goals.
+    return metrics['lin_disp'] #/ (1 + metrics['ang_disp'])
+
+def dont_crash(metrics):
+    return metrics['inv_hits']
+
+def go_forward_and_dont_crash(metrics):
+    return go_forward(metrics) * dont_crash(metrics)
+
+# The moderate versions of the above functions produce slightly better results
+# overall, and more healthy evolutionary dynamics in the B1 and B2 conditions.
+# This is probably because without this moderation, neither population is
+# actually trying to optimize the overall goal, so they don't produce pairings
+# that are fit overall (one population gains fitness while the other crashes).
+def moderate_go_forward(metrics):
+    return go_forward_and_dont_crash(metrics) * go_forward(metrics)
+
+def moderate_dont_crash(metrics):
+    return go_forward_and_dont_crash(metrics) * dont_crash(metrics)
+
 experiments = [
     Experiment(
         name='condition_a',
         fitness={
-            'topography': lambda metrics: metrics['dist'] * metrics['inv_hits'],
-            'controller': lambda metrics: metrics['dist'] * metrics['inv_hits']}),
+            'topography': go_forward_and_dont_crash,
+            'controller': go_forward_and_dont_crash}),
     Experiment(
         name='condition_b1',
         fitness={
-            'topography': lambda metrics: metrics['inv_hits'],
-            'controller': lambda metrics: metrics['dist']}),
+            'topography': moderate_dont_crash,
+            'controller': moderate_go_forward}),
     Experiment(
         name='condition_b2',
         fitness={
-            'topography': lambda metrics: metrics['dist'],
-            'controller': lambda metrics: metrics['inv_hits']}),
+            'topography': moderate_go_forward,
+            'controller': moderate_dont_crash}),
 ]
 
 if __name__ == '__main__':

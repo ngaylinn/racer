@@ -124,7 +124,6 @@ roles = PopulationManager.roles
 def get_scores(metrics, fitness, world_assignments=None):
     if world_assignments is None:
         world_assignments = {role: [0] for role in roles}
-    assert len(world_assignments) == len(metrics)
 
     scores = {
         role: reduce_fitness(

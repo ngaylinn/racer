@@ -33,7 +33,8 @@ class Simulator:
         self.objects.acc.fill(0.0)
         self.objects.rad.fill(0.0)
         self.objects.hits.fill(0)
-        self.objects.dist.fill(0.0)
+        self.objects.ang_disp.fill(0.0)
+        self.objects.lin_disp.fill(0.0)
         # To calculate displacement, we peek at the velocity values from the
         # objects in the previous step, so initialize to 0.0.
         self.__objects.vel.fill(0.0)
@@ -208,17 +209,21 @@ class Simulator:
         self.objects, self.__objects = self.__objects, self.objects
 
     @ti.kernel
-    def get_metrics_kernel(self, dist: ti.template(), hits: ti.template()):
+    def get_metrics_kernel(self, ang_disp: ti.template(),
+                           lin_disp: ti.template(), hits: ti.template()):
         for w, o in ti.ndrange(*self.objects.shape):
-            dist[w] += self.objects[w, o].dist
+            ang_disp[w] += self.objects[w, o].ang_disp
+            lin_disp[w] += self.objects[w, o].lin_disp
             hits[w] += self.objects[w, o].hits
 
     def get_metrics(self):
-        dist = ti.field(float, self.num_worlds)
+        ang_disp = ti.field(float, self.num_worlds)
+        lin_disp = ti.field(float, self.num_worlds)
         hits = ti.field(float, self.num_worlds)
-        self.get_metrics_kernel(dist, hits)
+        self.get_metrics_kernel(ang_disp, lin_disp, hits)
         return {
-            'dist': np.nan_to_num(dist.to_numpy()),
+            'ang_disp': np.nan_to_num(ang_disp.to_numpy()),
+            'lin_disp': np.nan_to_num(lin_disp.to_numpy()),
             'inv_hits': 1 / (1 + np.nan_to_num(hits.to_numpy()))
         }
 

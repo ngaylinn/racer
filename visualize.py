@@ -1,4 +1,4 @@
-import shutil
+import os
 import time
 import warnings
 
@@ -114,7 +114,7 @@ def save(simulator, get_scores, filename, debug=False, progress=None):
         __render_data(gui, metrics, get_scores(metrics))
         progress.update()
     video_manager.make_video(gif=False, mp4=True)
-    shutil.copyfile(video_manager.get_output_filename('.mp4'), filename)
+    os.rename(video_manager.get_output_filename('.mp4'), filename)
 
 
 def save_batch(simulator, filename, batch_size, debug=False):
