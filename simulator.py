@@ -8,6 +8,7 @@ from object import Object
 @ti.data_oriented
 class Simulator:
     def __init__(self, num_worlds=1):
+        print(f'A Simulator {id(self)}')
         self.num_worlds = num_worlds
         self.topographies = ti.field(float, shape=(num_worlds,) + c.WORLD_SHAPE)
         self.objects = Object.field(shape=(num_worlds, c.NUM_OBJECTS))
@@ -21,6 +22,9 @@ class Simulator:
         self.views = agent.View.field(shape=(num_worlds, c.NUM_OBJECTS))
         self.reactions = agent.Reaction.field(
             shape=(num_worlds, c.NUM_OBJECTS))
+
+    def __del__(self):
+        print(f'D Simulator {id(self)}')
 
     def randomize_objects(self):
         shape = (self.num_worlds, c.NUM_OBJECTS)

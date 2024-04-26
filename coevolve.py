@@ -1,3 +1,5 @@
+import gc
+
 from neatchi import Neat, NeatControllers, NeatRenderers
 import numpy as np
 import taichi as ti
@@ -12,7 +14,8 @@ def select(fitness_scores, count=None):
 
     total_fitness = sum(fitness_scores)
     if total_fitness == 0:
-        return np.random.randint(0, len(fitness_scores), size=count)
+        return np.random.randint(
+            0, len(fitness_scores), size=count, dtype=np.int32)
 
     sample_period = total_fitness / count
     sample_offset = np.random.random() * sample_period
@@ -33,18 +36,19 @@ def pair_select(fitness_scores, count=None):
         [p, m] if fitness_scores[p] > fitness_scores[m] else [m, p]
         for p, m in zip(select(fitness_scores, count),
                         select(fitness_scores, count))
-    ])
+    ], dtype=np.int32)
 
 def fixed_world_assignments():
-    return np.tile(np.arange(c.NUM_INDIVIDUALS), c.NUM_MATCH_UPS)
+    return np.tile(np.arange(c.NUM_INDIVIDUALS, dtype=np.int32),
+                   c.NUM_MATCH_UPS)
 
 def random_world_assignments():
     return np.concatenate([
         np.random.permutation(c.NUM_INDIVIDUALS)
-        for _ in range(c.NUM_MATCH_UPS)])
+        for _ in range(c.NUM_MATCH_UPS)], dtype=np.int32)
 
 def reduce_fitness(fitness_scores, world_assignments):
-    scores = np.zeros(c.NUM_INDIVIDUALS)
+    scores = np.zeros(c.NUM_INDIVIDUALS, dtype=np.int32)
     for score, individual in zip(fitness_scores, world_assignments):
         scores[individual] += score
     return scores / c.NUM_MATCH_UPS
@@ -62,6 +66,7 @@ def render_fixed_topology(topo: ti.template()):
 class PopulationManager:
     roles = ['topography', 'controller']
     def __init__(self, expt):
+        print(f'A PopulationManager {id(self)}')
         self.expt = expt
 
         # Neat algorithms for evolving CPPNs for both roles
@@ -84,6 +89,12 @@ class PopulationManager:
             'controller': NeatControllers(
                 num_worlds=c.NUM_WORLDS, num_activations=c.NUM_OBJECTS)
         }
+
+    def __del__(self):
+        for role in self.roles:
+            print(role, len(gc.get_referrers(self.neat[role].curr_pop)))
+            print(role, len(gc.get_referrers(self.neat[role].next_pop)))
+        print(f'D PopulationManager {id(self)}')
 
     def populate_simulator(self, simulator):
         self.actuators['topography'].render_all(simulator.topographies)
@@ -139,7 +150,7 @@ def coevolve(simulator, population_manager):
     history = []
 
     progress = trange(c.NUM_GENERATIONS)
-    scores = {'overall': np.zeros(1)}
+    scores = {'overall': np.zeros(1, dtype=np.int32)}
     for generation in progress:
         progress.set_description(f'Score == {scores["overall"].mean():4.2f}')
 

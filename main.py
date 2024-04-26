@@ -1,8 +1,8 @@
 import functools
+import gc
 from pathlib import Path
 
 import einops
-import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import taichi as ti
@@ -85,9 +85,30 @@ class Experiment:
         for trial in remaining_trials:
             (best_topography, best_controller), history = coevolve(
                 Simulator(c.NUM_WORLDS), PopulationManager(self))
-            self.record_history(history, trial)
+            # GPU memory management can be challenging, so make sure we free up
+            # all defunct objects and associated GPU memory allocations as soon
+            # as we're done with them.
+            gc.collect()
+            # print(pop_manager.neat['controller'].curr_pop)
+            # print('c_n_cp', gc.get_referrers(pop_manager.neat['controller'].curr_pop))
+            # print('c_n_np', len(gc.get_referrers(pop_manager.neat['controller'].next_pop)))
+            # print('c_n_m', len(gc.get_referrers(pop_manager.neat['controller'].matches)))
+            # print('t_n_cp', len(gc.get_referrers(pop_manager.neat['topography'].curr_pop)))
+            # print('t_n_np', len(gc.get_referrers(pop_manager.neat['topography'].next_pop)))
+            # print('t_n_m', len(gc.get_referrers(pop_manager.neat['topography'].matches)))
+            # print('c', len(gc.get_referrers(pop_manager.actuators['controller'])))
+            # print('r', len(gc.get_referrers(pop_manager.actuators['topography'])))
+
+            # TODO: Restore.
+            # self.record_history(history, trial)
             self.record_simulation(best_topography, best_controller, trial)
-        visualize_single_experiment(self)
+
+            # And clean up the temporary objects used to record the best
+            # simulation, just to be thorough.
+            del best_topography, best_controller
+            gc.collect()
+        # visualize_single_experiment(self)
+        print('End run experiment')
 
     def record_history(self, history, trial):
         filtered_history = []
@@ -105,6 +126,7 @@ class Experiment:
         df.to_csv(self.history_path(trial), index=False)
 
     def record_simulation(self, topography, controller, trial):
+        print('Begin record_simulation')
         simulator = Simulator()
         # TODO: It's problematic to duplicate this between here and
         # coevolve.PopulationManager, so maybe find a way to share.
@@ -120,6 +142,7 @@ class Experiment:
             simulator,
             functools.partial(get_scores, fitness=self.fitness),
             self.video_path(trial))
+        print('End record_simulation')
 
 def go_forward(metrics):
     # Including the angular displacement term seems to evovle circulating
@@ -155,20 +178,22 @@ experiments = [
         fitness={
             'topography': go_forward_and_dont_crash,
             'controller': go_forward_and_dont_crash}),
-    Experiment(
-        name='condition_b1',
-        fitness={
-            'topography': moderate_dont_crash,
-            'controller': moderate_go_forward}),
-    Experiment(
-        name='condition_b2',
-        fitness={
-            'topography': moderate_go_forward,
-            'controller': moderate_dont_crash}),
+#    Experiment(
+#        name='condition_b1',
+#        fitness={
+#            'topography': moderate_dont_crash,
+#            'controller': moderate_go_forward}),
+#    Experiment(
+#        name='condition_b2',
+#        fitness={
+#            'topography': moderate_go_forward,
+#            'controller': moderate_dont_crash}),
 ]
 
 if __name__ == '__main__':
+    print('Begin main')
     sns.set_style('darkgrid')
     for experiment in experiments:
         experiment.run()
-    visualize_all_experiments()
+    print('End main')
+    # visualize_all_experiments()
