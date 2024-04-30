@@ -14,7 +14,7 @@ from simulator import Simulator
 import visualize
 
 # TODO: Increase NUM_TRIALS and restore
-ti.init(arch=ti.cpu, default_fp=ti.f32, default_ip=ti.i32,
+ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
         debug=False)
 
 @ti.kernel
@@ -156,7 +156,7 @@ def go_forward(metrics):
     return metrics['lin_disp'] #/ (1 + metrics['ang_disp'])
 
 def dont_crash(metrics):
-    return metrics['inv_hits']
+    return 1 / (1 + metrics['hits'])
 
 def go_forward_and_dont_crash(metrics):
     return go_forward(metrics) * dont_crash(metrics)

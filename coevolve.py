@@ -66,17 +66,16 @@ def render_fixed_topology(topo: ti.template()):
 class PopulationManager:
     roles = ['topography', 'controller']
     def __init__(self, expt):
-        print(f'A PopulationManager {id(self)}')
         self.expt = expt
 
         # Neat algorithms for evolving CPPNs for both roles
         self.neat = {
             'topography': Neat(
                 num_inputs=2, num_outputs=1,
-                num_individuals=c.NUM_INDIVIDUALS),
+                num_individuals=c.NUM_INDIVIDUALS, is_recurrent=False),
             'controller': Neat(
                 num_inputs=agent.NUM_INPUTS, num_outputs=agent.NUM_OUTPUTS,
-                num_individuals=c.NUM_INDIVIDUALS)
+                num_individuals=c.NUM_INDIVIDUALS, is_recurrent=True)
         }
 
         # Assignments of CPPNs to simulated worlds.
@@ -89,12 +88,6 @@ class PopulationManager:
             'controller': NeatControllers(
                 num_worlds=c.NUM_WORLDS, num_activations=c.NUM_OBJECTS)
         }
-
-    def __del__(self):
-        for role in self.roles:
-            print(role, len(gc.get_referrers(self.neat[role].curr_pop)))
-            print(role, len(gc.get_referrers(self.neat[role].next_pop)))
-        print(f'D PopulationManager {id(self)}')
 
     def populate_simulator(self, simulator):
         self.actuators['topography'].render_all(simulator.topographies)

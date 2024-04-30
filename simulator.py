@@ -8,7 +8,6 @@ from object import Object
 @ti.data_oriented
 class Simulator:
     def __init__(self, num_worlds=1):
-        print(f'A Simulator {id(self)}')
         self.num_worlds = num_worlds
         self.topographies = ti.field(float, shape=(num_worlds,) + c.WORLD_SHAPE)
         self.objects = Object.field(shape=(num_worlds, c.NUM_OBJECTS))
@@ -22,9 +21,6 @@ class Simulator:
         self.views = agent.View.field(shape=(num_worlds, c.NUM_OBJECTS))
         self.reactions = agent.Reaction.field(
             shape=(num_worlds, c.NUM_OBJECTS))
-
-    def __del__(self):
-        print(f'D Simulator {id(self)}')
 
     def randomize_objects(self):
         shape = (self.num_worlds, c.NUM_OBJECTS)
@@ -173,7 +169,7 @@ class Simulator:
         # experiment.
         # TODO: Optimize?
         for o2 in range(c.NUM_OBJECTS):
-            # Only consider each pair of objects once. 
+            # Only consider each pair of objects once.
             if o1 <= o2:
                 continue
             pos1, pos2 = objects[w, o1].pos, objects[w, o2].pos
@@ -213,23 +209,39 @@ class Simulator:
         self.objects, self.__objects = self.__objects, self.objects
 
     @ti.kernel
-    def get_metrics_kernel(self, ang_disp: ti.template(),
-                           lin_disp: ti.template(), hits: ti.template()):
-        for w, o in ti.ndrange(*self.objects.shape):
+    def get_metrics_kernel(self, ang_disp: ti.types.ndarray(),
+                           lin_disp: ti.types.ndarray(),
+                           hits: ti.types.ndarray()):
+        for w, o in ti.ndrange(self.num_worlds, c.NUM_OBJECTS):
             ang_disp[w] += self.objects[w, o].ang_disp
             lin_disp[w] += self.objects[w, o].lin_disp
             hits[w] += self.objects[w, o].hits
 
     def get_metrics(self):
-        ang_disp = ti.field(float, self.num_worlds)
-        lin_disp = ti.field(float, self.num_worlds)
-        hits = ti.field(float, self.num_worlds)
+        ang_disp = np.zeros(self.num_worlds, dtype=np.float32)
+        lin_disp = np.zeros(self.num_worlds, dtype=np.float32)
+        hits = np.zeros(self.num_worlds, dtype=np.float32)
         self.get_metrics_kernel(ang_disp, lin_disp, hits)
         return {
-            'ang_disp': np.nan_to_num(ang_disp.to_numpy()),
-            'lin_disp': np.nan_to_num(lin_disp.to_numpy()),
-            'inv_hits': 1 / (1 + np.nan_to_num(hits.to_numpy()))
+            'ang_disp': np.nan_to_num(ang_disp),
+            'lin_disp': np.nan_to_num(lin_disp),
+            'hits': np.nan_to_num(hits)
         }
+
+        # ang_disp = ti.field(float, self.num_worlds)
+        # lin_disp = ti.field(float, self.num_worlds)
+        # hits = ti.field(float, self.num_worlds)
+        # self.get_metrics_kernel(ang_disp, lin_disp, hits)
+        # # return {
+        # #     'ang_disp': np.array([0.0] * c.NUM_WORLDS),
+        # #     'lin_disp': np.array([0.0] * c.NUM_WORLDS),
+        # #     'inv_hits': np.array([1.0] * c.NUM_WORLDS)
+        # # }
+        # return {
+        #     'ang_disp': np.nan_to_num(ang_disp.to_numpy()),
+        #     'lin_disp': np.nan_to_num(lin_disp.to_numpy()),
+        #     'inv_hits': 1 / (1 + np.nan_to_num(hits.to_numpy()))
+        # }
 
     def step(self):
         self.view_and_react()
