@@ -2,6 +2,7 @@ import os
 import time
 import warnings
 
+import numpy as np
 import taichi as ti
 from tqdm import trange
 
@@ -61,12 +62,17 @@ def __simulate_and_render_step(gui, simulator, debug=False):
     __render_objects(gui, simulator)
 
 def __render_data(gui, metrics, scores):
+    # Print metrics and scores for this simulation. Note that metrics is an
+    # array of size NUM_WORLDS and simulations is an array of size
+    # NUM_INDIVIDUALS, but since we're recording a single simulation these are
+    # both effectively 1. Taking the mean is just a convenient way to handle
+    # the 'overall' use case, which is a single value instead of an array.
     for index, (name, values) in enumerate(metrics.items()):
-        gui.text(f'{name}: {values[0]:0.3f}',
+        gui.text(f'{name}: {np.mean(values):0.3f}',
                  (0.5, 1.0 - 0.05 * index),
                  font_size=20, color=0xff00ff)
     for index, (name, values) in enumerate(scores.items()):
-        gui.text(f'{name}: {values[0]:0.3f}',
+        gui.text(f'{name}: {np.mean(values):0.3f}',
                  (0, 1.0 - 0.05 * index),
                  font_size=20, color=0xff00ff)
 

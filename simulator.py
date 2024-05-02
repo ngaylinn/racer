@@ -18,6 +18,8 @@ class Simulator:
         # otherwise they could just be computed on the fly and thrown away.
         self.avg_pos = ti.math.vec2.field(shape=(num_worlds))
         self.avg_vel = ti.math.vec2.field(shape=(num_worlds))
+        # TODO: Views and reactions only need to be stored for debug
+        # visualization! Eliminate these when running optimized.
         self.views = agent.View.field(shape=(num_worlds, c.NUM_OBJECTS))
         self.reactions = agent.Reaction.field(
             shape=(num_worlds, c.NUM_OBJECTS))
@@ -227,21 +229,6 @@ class Simulator:
             'lin_disp': np.nan_to_num(lin_disp),
             'hits': np.nan_to_num(hits)
         }
-
-        # ang_disp = ti.field(float, self.num_worlds)
-        # lin_disp = ti.field(float, self.num_worlds)
-        # hits = ti.field(float, self.num_worlds)
-        # self.get_metrics_kernel(ang_disp, lin_disp, hits)
-        # # return {
-        # #     'ang_disp': np.array([0.0] * c.NUM_WORLDS),
-        # #     'lin_disp': np.array([0.0] * c.NUM_WORLDS),
-        # #     'inv_hits': np.array([1.0] * c.NUM_WORLDS)
-        # # }
-        # return {
-        #     'ang_disp': np.nan_to_num(ang_disp.to_numpy()),
-        #     'lin_disp': np.nan_to_num(lin_disp.to_numpy()),
-        #     'inv_hits': 1 / (1 + np.nan_to_num(hits.to_numpy()))
-        # }
 
     def step(self):
         self.view_and_react()

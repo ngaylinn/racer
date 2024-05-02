@@ -8,6 +8,25 @@ from tqdm import trange
 import agent
 import constants as c
 
+
+# Neat algorithms for evolving CPPNs for both roles
+neat = {
+    'topography': Neat(
+        num_inputs=2, num_outputs=1,
+        num_individuals=c.NUM_INDIVIDUALS, is_recurrent=False),
+    'controller': Neat(
+        num_inputs=agent.NUM_INPUTS, num_outputs=agent.NUM_OUTPUTS,
+        num_individuals=c.NUM_INDIVIDUALS, is_recurrent=True)
+}
+
+# Actuators for interfacing between the CPPNs and the simulation.
+actuators = {
+    'topography': NeatRenderers(
+        num_worlds=c.NUM_WORLDS, num_rows=c.WORLD_SIZE),
+    'controller': NeatControllers(
+        num_worlds=c.NUM_WORLDS, num_activations=c.NUM_OBJECTS)
+}
+
 def select(fitness_scores, count=None):
     if count is None:
         count = len(fitness_scores)
@@ -48,7 +67,7 @@ def random_world_assignments():
         for _ in range(c.NUM_MATCH_UPS)], dtype=np.int32)
 
 def reduce_fitness(fitness_scores, world_assignments):
-    scores = np.zeros(c.NUM_INDIVIDUALS, dtype=np.int32)
+    scores = np.zeros(c.NUM_INDIVIDUALS)
     for score, individual in zip(fitness_scores, world_assignments):
         scores[individual] += score
     return scores / c.NUM_MATCH_UPS
@@ -68,56 +87,38 @@ class PopulationManager:
     def __init__(self, expt):
         self.expt = expt
 
-        # Neat algorithms for evolving CPPNs for both roles
-        self.neat = {
-            'topography': Neat(
-                num_inputs=2, num_outputs=1,
-                num_individuals=c.NUM_INDIVIDUALS, is_recurrent=False),
-            'controller': Neat(
-                num_inputs=agent.NUM_INPUTS, num_outputs=agent.NUM_OUTPUTS,
-                num_individuals=c.NUM_INDIVIDUALS, is_recurrent=True)
-        }
-
         # Assignments of CPPNs to simulated worlds.
         self.world_assignments = {}
 
-        # Actuators for interfacing between the CPPNs and the simulation.
-        self.actuators = {
-            'topography': NeatRenderers(
-                num_worlds=c.NUM_WORLDS, num_rows=c.WORLD_SIZE),
-            'controller': NeatControllers(
-                num_worlds=c.NUM_WORLDS, num_activations=c.NUM_OBJECTS)
-        }
-
     def populate_simulator(self, simulator):
-        self.actuators['topography'].render_all(simulator.topographies)
+        actuators['topography'].render_all(simulator.topographies)
         # render_fixed_topology(simulator.topographies)
-        simulator.controllers = self.actuators['controller']
+        simulator.controllers = actuators['controller']
         simulator.randomize_objects()
 
     def get_best_individuals(self, scores):
         world_index = np.argmax(scores['overall'])
         return (
-            self.actuators['topography'].render_one(
+            actuators['topography'].render_one(
                 self.world_assignments['topography'][world_index],
                 c.WORLD_SHAPE),
-            self.actuators['controller'].get_one(
+            actuators['controller'].get_one(
                 self.world_assignments['controller'][world_index]))
 
     def update_actuators(self, role):
         self.world_assignments[role] = random_world_assignments()
-        self.actuators[role].update(
-            self.neat[role].curr_pop, self.world_assignments[role])
+        actuators[role].update(
+            neat[role].curr_pop, self.world_assignments[role])
 
     def randomize(self):
         for role in self.roles:
-            self.neat[role].random_population()
+            neat[role].random_population()
             self.update_actuators(role)
 
     def propagate(self, scores):
         for role in self.roles:
             selections = pair_select(scores[role])
-            self.neat[role].propagate(selections)
+            neat[role].propagate(selections)
             self.update_actuators(role)
 
     def get_scores(self, metrics):
@@ -126,16 +127,25 @@ class PopulationManager:
 roles = PopulationManager.roles
 
 def get_scores(metrics, fitness, world_assignments=None):
-    if world_assignments is None:
-        world_assignments = {role: [0] for role in roles}
+    # Metrics have one value per world, but scores are given per individual, by
+    # averaging the performance of that individual across all of its instances.
+    if world_assignments:
+        scores = {
+            role: reduce_fitness(
+                fitness[role](metrics),
+                world_assignments[role])
+            for role in roles
+        }
+    else:
+        scores = {
+            role: fitness[role](metrics)
+            for role in roles
+        }
 
-    scores = {
-        role: reduce_fitness(
-            fitness[role](metrics),
-            world_assignments[role])
-        for role in roles
-    }
-    scores['overall'] = fitness['overall'](metrics)
+    # Overall scores combine the performance of all roles, so its not possible
+    # to attribute them to individuals of any role. So, just collapse it down
+    # to a single score for this batch of simulations.
+    scores['overall'] = fitness['overall'](metrics).mean()
     return scores
 
 def coevolve(simulator, population_manager):
@@ -143,9 +153,9 @@ def coevolve(simulator, population_manager):
     history = []
 
     progress = trange(c.NUM_GENERATIONS)
-    scores = {'overall': np.zeros(1, dtype=np.int32)}
+    scores = {'overall': 0.0}
     for generation in progress:
-        progress.set_description(f'Score == {scores["overall"].mean():4.2f}')
+        progress.set_description(f'Score == {scores["overall"]:4.2f}')
 
         population_manager.populate_simulator(simulator)
         metrics = simulator.run()

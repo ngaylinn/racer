@@ -1,5 +1,4 @@
 import functools
-import gc
 from pathlib import Path
 
 import einops
@@ -8,14 +7,20 @@ import pandas as pd
 import taichi as ti
 import seaborn as sns
 
+# TODO: Refactor coevolve so that this can come after all imports, not in the
+# middle.
+ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
+        debug=False)
+
 from coevolve import PopulationManager, coevolve, get_scores
 import constants as c
 from simulator import Simulator
 import visualize
 
-# TODO: Increase NUM_TRIALS and restore
-ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
-        debug=False)
+# TODO: Allow a single Simulator to run workloads of various sizes, so you
+# don't need two of these?
+large_simulator = Simulator(c.NUM_WORLDS)
+small_simulator = Simulator(1)
 
 @ti.kernel
 def render_fixed_topology(topo: ti.template()):
@@ -73,6 +78,7 @@ class Experiment:
     def history_path(self, trial):
         return Path(f'output/history_{self.name}_{trial}.csv')
 
+    # TODO: Refactor to run trials in parallel?
     def run(self):
         print(f'Running {c.NUM_TRIALS} trials of {self.name} '
               f'with {c.NUM_WORLDS} parallel simulations:')
@@ -84,31 +90,11 @@ class Experiment:
             return
         for trial in remaining_trials:
             (best_topography, best_controller), history = coevolve(
-                Simulator(c.NUM_WORLDS), PopulationManager(self))
-            # GPU memory management can be challenging, so make sure we free up
-            # all defunct objects and associated GPU memory allocations as soon
-            # as we're done with them.
-            gc.collect()
-            # print(pop_manager.neat['controller'].curr_pop)
-            # print('c_n_cp', gc.get_referrers(pop_manager.neat['controller'].curr_pop))
-            # print('c_n_np', len(gc.get_referrers(pop_manager.neat['controller'].next_pop)))
-            # print('c_n_m', len(gc.get_referrers(pop_manager.neat['controller'].matches)))
-            # print('t_n_cp', len(gc.get_referrers(pop_manager.neat['topography'].curr_pop)))
-            # print('t_n_np', len(gc.get_referrers(pop_manager.neat['topography'].next_pop)))
-            # print('t_n_m', len(gc.get_referrers(pop_manager.neat['topography'].matches)))
-            # print('c', len(gc.get_referrers(pop_manager.actuators['controller'])))
-            # print('r', len(gc.get_referrers(pop_manager.actuators['topography'])))
-
+                large_simulator, PopulationManager(self))
             # TODO: Restore.
-            # self.record_history(history, trial)
+            self.record_history(history, trial)
             self.record_simulation(best_topography, best_controller, trial)
-
-            # And clean up the temporary objects used to record the best
-            # simulation, just to be thorough.
-            del best_topography, best_controller
-            gc.collect()
-        # visualize_single_experiment(self)
-        print('End run experiment')
+        visualize_single_experiment(self)
 
     def record_history(self, history, trial):
         filtered_history = []
@@ -126,23 +112,20 @@ class Experiment:
         df.to_csv(self.history_path(trial), index=False)
 
     def record_simulation(self, topography, controller, trial):
-        print('Begin record_simulation')
-        simulator = Simulator()
         # TODO: It's problematic to duplicate this between here and
         # coevolve.PopulationManager, so maybe find a way to share.
-        simulator.topographies.from_numpy(
+        small_simulator.topographies.from_numpy(
             einops.repeat(topography, 'w h -> 1 w h'))
-        # render_fixed_topology(simulator.topographies)
-        simulator.controllers = controller
+        # render_fixed_topology(small_simulator.topographies)
+        small_simulator.controllers = controller
         # visualize.show(
-        #     simulator,
+        #     small_simulator,
         #     functools.partial(get_scores, fitness=self.fitness),
         #     debug=True)
         visualize.save(
-            simulator,
+            small_simulator,
             functools.partial(get_scores, fitness=self.fitness),
             self.video_path(trial))
-        print('End record_simulation')
 
 def go_forward(metrics):
     # Including the angular displacement term seems to evovle circulating
@@ -153,7 +136,7 @@ def go_forward(metrics):
     # and hard to manage. On the other hand, since this fitness function
     # correlates with collisions, it produces better coevolutionary dynamics,
     # since the two populations have complementary goals.
-    return metrics['lin_disp'] #/ (1 + metrics['ang_disp'])
+    return metrics['lin_disp'] # / (1 + metrics['ang_disp'])
 
 def dont_crash(metrics):
     return 1 / (1 + metrics['hits'])
@@ -178,22 +161,20 @@ experiments = [
         fitness={
             'topography': go_forward_and_dont_crash,
             'controller': go_forward_and_dont_crash}),
-#    Experiment(
-#        name='condition_b1',
-#        fitness={
-#            'topography': moderate_dont_crash,
-#            'controller': moderate_go_forward}),
-#    Experiment(
-#        name='condition_b2',
-#        fitness={
-#            'topography': moderate_go_forward,
-#            'controller': moderate_dont_crash}),
+    Experiment(
+        name='condition_b1',
+        fitness={
+            'topography': moderate_dont_crash,
+            'controller': moderate_go_forward}),
+    Experiment(
+        name='condition_b2',
+        fitness={
+            'topography': moderate_go_forward,
+            'controller': moderate_dont_crash}),
 ]
 
 if __name__ == '__main__':
-    print('Begin main')
     sns.set_style('darkgrid')
     for experiment in experiments:
         experiment.run()
-    print('End main')
-    # visualize_all_experiments()
+    visualize_all_experiments()
