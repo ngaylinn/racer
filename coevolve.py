@@ -1,36 +1,26 @@
-import gc
+"""The co-evolutionary algorithm for this project.
 
-from neatchi import Neat, NeatControllers, NeatRenderers
+The main entrypoint to this module is the coevolve() function, which runs the
+main evolutionary loop for all trials of a single experiment, and returns a log
+of fitness scores for all roles (controller, topography, and overall) across
+all trials and generations. This module also provides the select() and
+pair_select() functions, which use Stochastic Universal Selection to pick
+population indices for breeding based on fitness scores.
+
+The fitness functions themselves are provided by main.py and the work of
+generating, simulating, and breeding populations is provided by the
+PopulationManager class.
+"""
+
 import numpy as np
-import taichi as ti
+import pandas as pd
 from tqdm import trange
 
-import agent
 import constants as c
 
 
-# Neat algorithms for evolving CPPNs for both roles
-neat = {
-    'topography': Neat(
-        num_inputs=2, num_outputs=1,
-        num_individuals=c.NUM_INDIVIDUALS, is_recurrent=False),
-    'controller': Neat(
-        num_inputs=agent.NUM_INPUTS, num_outputs=agent.NUM_OUTPUTS,
-        num_individuals=c.NUM_INDIVIDUALS, is_recurrent=True)
-}
-
-# Actuators for interfacing between the CPPNs and the simulation.
-actuators = {
-    'topography': NeatRenderers(
-        num_worlds=c.NUM_WORLDS, num_rows=c.WORLD_SIZE),
-    'controller': NeatControllers(
-        num_worlds=c.NUM_WORLDS, num_activations=c.NUM_OBJECTS)
-}
-
-def select(fitness_scores, count=None):
-    if count is None:
-        count = len(fitness_scores)
-
+def select(fitness_scores):
+    count = len(fitness_scores)
     total_fitness = sum(fitness_scores)
     if total_fitness == 0:
         return np.random.randint(
@@ -50,119 +40,47 @@ def select(fitness_scores, count=None):
         result[sample_index] = population_index
     return result
 
-def pair_select(fitness_scores, count=None):
+
+def pair_select(fitness_scores):
     return np.array([
+        # In every breeding pair, the most fit is considered the "parent" and
+        # the other is the "mate." This is used by the Neat algorithm to
+        # introduce a small bias towards more fit individuals in crossover.
         [p, m] if fitness_scores[p] > fitness_scores[m] else [m, p]
-        for p, m in zip(select(fitness_scores, count),
-                        select(fitness_scores, count))
+        for p, m in zip(select(fitness_scores), select(fitness_scores))
     ], dtype=np.int32)
 
-def fixed_world_assignments():
-    return np.tile(np.arange(c.NUM_INDIVIDUALS, dtype=np.int32),
-                   c.NUM_MATCH_UPS)
 
-def random_world_assignments():
-    return np.concatenate([
-        np.random.permutation(c.NUM_INDIVIDUALS)
-        for _ in range(c.NUM_MATCH_UPS)], dtype=np.int32)
-
-def reduce_fitness(fitness_scores, world_assignments):
-    scores = np.zeros(c.NUM_INDIVIDUALS)
-    for score, individual in zip(fitness_scores, world_assignments):
-        scores[individual] += score
-    return scores / c.NUM_MATCH_UPS
-
-
-@ti.kernel
-def render_fixed_topology(topo: ti.template()):
-    center = ti.math.vec2(256.0, 256.0)
-    max_dist = ti.math.distance(ti.math.vec2(0.0, 0.0), center)
-    for w, x, y in topo:
-        dist = ti.math.distance((x, y), center) / max_dist
-        topo[w, x, y] = 1.0 - dist**2
-
-@ti.data_oriented
-class PopulationManager:
-    roles = ['topography', 'controller']
-    def __init__(self, expt):
-        self.expt = expt
-
-        # Assignments of CPPNs to simulated worlds.
-        self.world_assignments = {}
-
-    def populate_simulator(self, simulator):
-        actuators['topography'].render_all(simulator.topographies)
-        # render_fixed_topology(simulator.topographies)
-        simulator.controllers = actuators['controller']
-        simulator.randomize_objects()
-
-    def get_best_individuals(self, scores):
-        world_index = np.argmax(scores['overall'])
-        return (
-            actuators['topography'].render_one(
-                self.world_assignments['topography'][world_index],
-                c.WORLD_SHAPE),
-            actuators['controller'].get_one(
-                self.world_assignments['controller'][world_index]))
-
-    def update_actuators(self, role):
-        self.world_assignments[role] = random_world_assignments()
-        actuators[role].update(
-            neat[role].curr_pop, self.world_assignments[role])
-
-    def randomize(self):
-        for role in self.roles:
-            neat[role].random_population()
-            self.update_actuators(role)
-
-    def propagate(self, scores):
-        for role in self.roles:
-            selections = pair_select(scores[role])
-            neat[role].propagate(selections)
-            self.update_actuators(role)
-
-    def get_scores(self, metrics):
-        return get_scores(metrics, self.expt.fitness, self.world_assignments)
-
-roles = PopulationManager.roles
-
-def get_scores(metrics, fitness, world_assignments=None):
-    # Metrics have one value per world, but scores are given per individual, by
-    # averaging the performance of that individual across all of its instances.
-    if world_assignments:
-        scores = {
-            role: reduce_fitness(
-                fitness[role](metrics),
-                world_assignments[role])
-            for role in roles
-        }
-    else:
-        scores = {
-            role: fitness[role](metrics)
-            for role in roles
-        }
-
-    # Overall scores combine the performance of all roles, so its not possible
-    # to attribute them to individuals of any role. So, just collapse it down
-    # to a single score for this batch of simulations.
-    scores['overall'] = fitness['overall'](metrics).mean()
-    return scores
-
-def coevolve(simulator, population_manager):
+def coevolve(simulator, population_manager, fitness):
+    # Randomly initialize the populations
     population_manager.randomize()
-    history = []
 
+    # Tracking across generations
     progress = trange(c.NUM_GENERATIONS)
-    scores = {'overall': 0.0}
+    overall_score = 0.0
+    all_metrics = []
+    all_scores = []
+
+    # Evolve the random populations
     for generation in progress:
-        progress.set_description(f'Score == {scores["overall"]:4.2f}')
+        progress.set_description(f'Score == {overall_score:4.2f}')
 
         population_manager.populate_simulator(simulator)
-        metrics = simulator.run()
-        scores = population_manager.get_scores(metrics)
+        metrics = population_manager.annotate_metrics(simulator.run())
+        metrics['generation'] = generation
+        all_metrics.append(metrics)
 
-        history.append({'generation': generation} | metrics | scores)
+        scores = population_manager.get_scores(fitness, metrics)
+        scores['generation'] = generation
+        scores.to_csv('scores.csv', index=False)
+        overall_score = scores[scores['role'] == 'overall']['fitness'].mean()
+        all_scores.append(scores)
+
         if generation + 1 < c.NUM_GENERATIONS:
             population_manager.propagate(scores)
 
-    return (population_manager.get_best_individuals(scores), history)
+    best_row = fitness['overall'](metrics).argmax()
+    # Currently, the index column corresponds with the values in the world
+    # column, but I still look up the world just in case that ever changes.
+    best_world_index = int(metrics.loc[best_row]['world'])
+    return (best_world_index, pd.concat(all_metrics), pd.concat(all_scores))

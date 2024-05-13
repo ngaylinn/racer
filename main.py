@@ -1,132 +1,114 @@
-import functools
+"""Run a series of experiments with evolved agents in an evolved environment.
+
+In this experiment, we coevolve CPPNs to represent both environments and
+controllers for agents in this environment. The agents are balls, and their
+environment is an uneven topography that they roll on.
+
+This script runs a series of experiments which evaluate fitness in different
+ways. For each one, it captures a video of the most fit resulting simulation,
+charts showing the pace of evolution in each experiment and comparing across
+experiments, and a CSV dump of all metrics and scores over the course of each
+generation.
+"""
+
 from pathlib import Path
 
-import einops
 import matplotlib.pyplot as plt
 import pandas as pd
 import taichi as ti
 import seaborn as sns
 
-# TODO: Refactor coevolve so that this can come after all imports, not in the
-# middle.
-ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
-        debug=False)
-
-from coevolve import PopulationManager, coevolve, get_scores
+from coevolve import coevolve
 import constants as c
+from population_manager import PopulationManager
 from simulator import Simulator
 import visualize
 
-# TODO: Allow a single Simulator to run workloads of various sizes, so you
-# don't need two of these?
-large_simulator = Simulator(c.NUM_WORLDS)
-small_simulator = Simulator(1)
 
-@ti.kernel
-def render_fixed_topology(topo: ti.template()):
-    center = ti.math.vec2(256.0, 256.0)
-    max_dist = ti.math.distance(ti.math.vec2(0.0, 0.0), center)
-    for w, x, y in topo:
-        dist = ti.math.distance((x, y), center) / max_dist
-        topo[w, x, y] = 1.0 - dist**2
+ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
+        debug=False)
 
-def load_one_experiment_data(experiment):
-    one_experiment_data = pd.DataFrame()
-    for trial in range(c.NUM_TRIALS):
-        trial_data = pd.read_csv(experiment.history_path(trial))
-        trial_data['trial'] = trial
-        one_experiment_data = pd.concat((one_experiment_data, trial_data))
-    return one_experiment_data
 
-def visualize_single_experiment(experiment):
-    one_experiment_data = load_one_experiment_data(experiment)
-    fig = sns.relplot(data=one_experiment_data, x='generation', y='score',
-                      hue='role', kind='line')
+# These global objects capture all GPU memory allocations for the life of this
+# program. Don't attempt to delete these objects, as the GPU memory will not be
+# freed! Taichi makes it difficult to do otherwise.
+population_manager = PopulationManager()
+simulator = Simulator()
+
+
+def summarize_single_experiment(experiment):
+    """Generate a fitness chart for one experiment."""
+    data = experiment.get_scores()
+    fig = sns.relplot(
+        data=data, x='generation', y='fitness', hue='role', kind='line')
     fig.set(title=experiment.name)
     fig.savefig(f'output/chart_{experiment.name}.png')
     plt.close()
 
-def load_all_experiments_data():
-    all_experiments_data = pd.DataFrame()
-    for experiment in experiments:
-        one_experiment_data = load_one_experiment_data(experiment)
-        one_experiment_data['experiment'] = experiment.name
-        all_experiments_data = pd.concat((
-            all_experiments_data, one_experiment_data))
-    return all_experiments_data
 
-def visualize_all_experiments():
-    all_experiments_data = load_all_experiments_data()
-    all_experiments_data = all_experiments_data.where(
-        all_experiments_data['role'] == 'overall').dropna()
-    fig = sns.relplot(data=all_experiments_data, x='generation', y='score',
+def get_all_experiment_scores():
+    """Load data from all experiments into a single DataFrame."""
+    all_scores = []
+    for experiment in experiments:
+        scores = experiment.get_scores()
+        scores['experiment'] = experiment.name
+        all_scores.append(scores)
+    return pd.concat(all_scores)
+
+
+def summarize_all_experiments():
+    """Generate a fitness chart comparing results across experiments."""
+    scores = get_all_experiment_scores()
+    scores = scores[scores['role'] == 'overall']
+    fig = sns.relplot(data=scores, x='generation', y='fitness',
                       hue='experiment', kind='line')
     fig.set(title='Overall scores across experiments')
     fig.savefig('output/chart_overall.png')
     plt.close()
 
+
 class Experiment:
     def __init__(self, name, fitness):
         self.name = name
+        # A dict of fitness scores per role (ie, for topographies, controllers,
+        # and the simulation overall). The overall score is the same for all
+        # experiments, but all experiments define per-role fitness differently.
         self.fitness = {
             'overall': go_forward_and_dont_crash
         } | fitness
+        self.video_path = Path(f'output/video_{name}.mp4')
 
-    def video_path(self, trial):
-        return Path(f'output/video_{self.name}_{trial}.mp4')
+    def log_path(self, log_name):
+        return Path(f'output/log_{self.name}_{log_name}.csv')
 
-    def history_path(self, trial):
-        return Path(f'output/history_{self.name}_{trial}.csv')
-
-    # TODO: Refactor to run trials in parallel?
     def run(self):
         print(f'Running {c.NUM_TRIALS} trials of {self.name} '
               f'with {c.NUM_WORLDS} parallel simulations:')
-        remaining_trials = [
-            trial for trial in range(c.NUM_TRIALS)
-            if not self.history_path(trial).exists()]
-        if len(remaining_trials) == 0:
-            print(f'Already ran {self.name}, reusing saved results.')
-            return
-        for trial in remaining_trials:
-            (best_topography, best_controller), history = coevolve(
-                large_simulator, PopulationManager(self))
-            # TODO: Restore.
-            self.record_history(history, trial)
-            self.record_simulation(best_topography, best_controller, trial)
-        visualize_single_experiment(self)
+        best_world_index, metrics, scores = coevolve(
+            simulator, population_manager, self.fitness)
+        self.save_simulation(best_world_index)
+        self.save_logs(metrics, scores)
+        summarize_single_experiment(self)
 
-    def record_history(self, history, trial):
-        filtered_history = []
-        for event in history:
-            for role in PopulationManager.roles + ['overall']:
-                # Reorganize the history log so that we keep only the
-                # population-average score for each generation, and break down
-                # scores by role for easy visualization with Seaborn.
-                filtered_history.append({
-                    'generation': event['generation'],
-                    'score': event[role].mean(),
-                    'role': role
-                })
-        df = pd.DataFrame(filtered_history)
-        df.to_csv(self.history_path(trial), index=False)
+    def save_logs(self, metrics, scores):
+        metrics.to_csv(self.log_path('metrics'), index=False)
+        scores.to_csv(self.log_path('scores'), index=False)
 
-    def record_simulation(self, topography, controller, trial):
-        # TODO: It's problematic to duplicate this between here and
-        # coevolve.PopulationManager, so maybe find a way to share.
-        small_simulator.topographies.from_numpy(
-            einops.repeat(topography, 'w h -> 1 w h'))
-        # render_fixed_topology(small_simulator.topographies)
-        small_simulator.controllers = controller
-        # visualize.show(
-        #     small_simulator,
-        #     functools.partial(get_scores, fitness=self.fitness),
-        #     debug=True)
-        visualize.save(
-            small_simulator,
-            functools.partial(get_scores, fitness=self.fitness),
-            self.video_path(trial))
+    def get_scores(self):
+        return pd.read_csv(self.log_path('scores'))
 
+    def save_simulation(self, world_index):
+        def get_scores(metrics):
+            return {
+                key: self.fitness[key](
+                    metrics[metrics['world'] == world_index]).iloc[0]
+                for key in self.fitness
+            }
+        #visualize.show(simulator, world_index, get_scores)
+        visualize.save(simulator, world_index, get_scores, self.video_path)
+
+
+# Convenience functions for fitness calculations.
 def go_forward(metrics):
     # Including the angular displacement term seems to evovle circulating
     # behavior in a simple, fixed environment, but when the topography
@@ -138,11 +120,14 @@ def go_forward(metrics):
     # since the two populations have complementary goals.
     return metrics['lin_disp'] # / (1 + metrics['ang_disp'])
 
+
 def dont_crash(metrics):
     return 1 / (1 + metrics['hits'])
 
+
 def go_forward_and_dont_crash(metrics):
     return go_forward(metrics) * dont_crash(metrics)
+
 
 # The moderate versions of the above functions produce slightly better results
 # overall, and more healthy evolutionary dynamics in the B1 and B2 conditions.
@@ -152,9 +137,12 @@ def go_forward_and_dont_crash(metrics):
 def moderate_go_forward(metrics):
     return go_forward_and_dont_crash(metrics) * go_forward(metrics)
 
+
 def moderate_dont_crash(metrics):
     return go_forward_and_dont_crash(metrics) * dont_crash(metrics)
 
+
+# All the experiments run by this script.
 experiments = [
     Experiment(
         name='condition_a',
@@ -173,8 +161,11 @@ experiments = [
             'controller': moderate_dont_crash}),
 ]
 
+
+# Actually run all the experiments and generate all outputs. This takes about
+# five minutes on my laptop.
 if __name__ == '__main__':
     sns.set_style('darkgrid')
     for experiment in experiments:
         experiment.run()
-    visualize_all_experiments()
+    summarize_all_experiments()
