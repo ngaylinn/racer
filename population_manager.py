@@ -41,30 +41,49 @@ def pair_select_per_trial(scores):
     within a single Neat population, enforcing that individuals in different
     trials never mate without exposing that constraint to the Neatchi library.
     """
-    matches_per_trial = [
-        pair_select(df['fitness'].to_numpy()) + (trial * c.NUM_INDIVIDUALS)
-        for trial, df in scores.groupby('trial')
-    ]
-    return np.concatenate(matches_per_trial)
+    frames = []
+    selections_per_trial = []
+    for trial, trial_df in scores.groupby('trial'):
+        selections = pair_select(trial_df['fitness'].to_numpy())
+        frames.append(pd.DataFrame({
+            'individual': np.arange(c.NUM_INDIVIDUALS, dtype=np.int32),
+            'trial': trial,
+            'parent': selections[:, 0],
+            'mate': selections[:, 1],
+        }))
+
+        # Trials are just sub-populations within a single NeatPopulation, so
+        # translate from trial-relative indexing to absolute indexing.
+        np.add(selections, trial * c.NUM_INDIVIDUALS, out=selections)
+        selections_per_trial.append(selections)
+
+    return np.concatenate(selections_per_trial), pd.concat(frames)
 
 
 def fixed_world_assignments():
-    return np.tile(
-        np.arange(c.NUM_INDIVIDUALS, dtype=np.int32),
-        c.NUM_TRIALS * c.NUM_MATCH_UPS)
+    return np.concatenate([
+        # Assign individuals to the same NUM_MATCHUPS pairings for each trial.
+        np.tile(
+            np.arange(c.NUM_INDIVIDUALS, dtype=np.int32),
+            c.NUM_MATCH_UPS
+        # Trials are just sub-populations within a single NeatPopulation, so
+        # translate from trial-relative indexing to absolute indexing.
+        ) + trial * c.NUM_INDIVIDUALS
+        for trial in range(c.NUM_TRIALS)])
 
 
 def random_world_assignments():
     return np.concatenate([
-        np.random.permutation(c.NUM_INDIVIDUALS)
-        for _ in range(c.NUM_TRIALS * c.NUM_MATCH_UPS)], dtype=np.int32)
-
-
-def index_dict_of_arrays(dict_of_arrays, index):
-    return {
-        key: values[index]
-        for key, values in dict_of_arrays.items()
-    }
+        # Randomly assign individuals to NUM_MATCHUPS pairings for each trial.
+        np.concatenate([
+            np.random.permutation(c.NUM_INDIVIDUALS).astype(np.int32) \
+            # Trials are just sub-populations within a single NeatPopulation,
+            # so translate from trial-relative indexing to absolute indexing.
+            + trial * c.NUM_INDIVIDUALS
+            for _ in range(c.NUM_MATCH_UPS)
+        ])
+        for trial in range(c.NUM_TRIALS)
+    ])
 
 
 @ti.data_oriented
@@ -115,11 +134,22 @@ class PopulationManager:
             self.update_actuators(role)
 
     def propagate(self, scores):
+        all_genealogies = []
         for role in self.roles:
-            selections = pair_select_per_trial(
+            # Get selections and genealogy log.
+            selections, genealogy = pair_select_per_trial(
                 scores[scores['role'] == role])
+
+            # Apply selections to the population / actuators.
+            # TODO: Ideally, we should record which matches performed crossover
+            # in the genealogy.
             self.neat[role].propagate(selections)
             self.update_actuators(role)
+
+            # Log the feel genealogy of the populations.
+            genealogy['role'] = role
+            all_genealogies.append(genealogy)
+        return pd.concat(all_genealogies)
 
     def annotate_metrics(self, metrics):
         # Associate each world with the individuals of each role that
@@ -132,22 +162,24 @@ class PopulationManager:
 
     def get_scores(self, fitness, metrics):
         frames = []
-        for trial, trial_df in metrics.groupby('trial'):
-            for role in self.roles:
-                frames.append(pd.DataFrame({
-                    'trial': trial,
-                    'role': role,
-                    'individual': np.arange(c.NUM_INDIVIDUALS),
-                    # This averages metrics across instances THEN computes
-                    # fitness, which is much more efficient than computing
-                    # fitness then averaging the results, but may not work for
-                    # other fitness functions.
-                    'fitness': fitness[role](
-                        trial_df.groupby(f'{role}_index').mean())
-                }))
-            frames.append(pd.DataFrame([{
-                'trial': trial,
-                'role': 'overall',
-                'fitness': fitness['overall'](trial_df).mean()
-            }]))
+        for role in self.roles:
+            # Calculate the role-specific fitness score for all worlds, then
+            # average each individual's score across all match-ups in each of
+            # the trials.
+            frames.append(pd.DataFrame({
+                'trial': metrics['trial'].to_numpy(),
+                'role': role,
+                'individual': metrics[f'{role}_index'].to_numpy(),
+                'fitness': fitness[role](metrics)
+            }).groupby(['trial', 'role', 'individual']).mean().reset_index())
+
+        # Also calculate an overall score for each trial, not attributed to any
+        # individuals.
+        frames.append(pd.DataFrame({
+            'trial': metrics['trial'].to_numpy(),
+            'role': 'overall',
+            'individual': None,
+            'fitness': fitness['overall'](metrics)
+        }).groupby(['trial', 'role']).mean().reset_index())
+
         return pd.concat(frames)

@@ -15,6 +15,7 @@ import warnings
 import taichi as ti
 from tqdm import trange
 
+import ball
 import constants as c
 
 LAST_FRAME_SECS = 2
@@ -102,11 +103,18 @@ def show(simulator, world_index, get_scores):
         simulator.randomize_balls()
         for _ in range(c.NUM_STEPS):
             simulate_and_render_step(gui, simulator, world_index)
+            # Show metrics and scores on every frame in debug mode.
+            if simulator.debug:
+                metrics = simulator.get_metrics()
+                metrics = metrics[metrics['world'] == world_index]
+                render_data(gui, metrics, get_scores(metrics))
             gui.show()
-        metrics = simulator.get_metrics()
-        metrics = metrics[metrics['world'] == world_index]
-        render_data(gui, metrics, get_scores(metrics))
-        gui.show()
+        # Only show metrics and scores on the last frame, otherwise.
+        if not simulator.debug:
+            metrics = simulator.get_metrics()
+            metrics = metrics[metrics['world'] == world_index]
+            render_data(gui, metrics, get_scores(metrics))
+            gui.show()
         time.sleep(LAST_FRAME_SECS)
 
 
@@ -125,6 +133,11 @@ def save(simulator, world_index, get_scores, filename):
     for _ in range(c.NUM_STEPS):
         gui.clear()
         simulate_and_render_step(gui, simulator, world_index)
+        # Show metrics and scores on every frame in debug mode.
+        if simulator.debug:
+            metrics = simulator.get_metrics()
+            metrics = metrics[metrics['world'] == world_index]
+            render_data(gui, metrics, get_scores(metrics))
         # Ignore spurious warnings from Taichi's image writing code.
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -138,6 +151,7 @@ def save(simulator, world_index, get_scores, filename):
             warnings.simplefilter('ignore')
             video_manager.write_frame(gui.get_image())
         metrics = simulator.get_metrics()
+        metrics = metrics[metrics['world'] == world_index]
         render_data(gui, metrics, get_scores(metrics))
         progress.update()
 

@@ -263,11 +263,11 @@ class Simulator:
         hits = np.zeros(c.NUM_WORLDS, dtype=np.float32)
         self.get_metrics_kernel(ang_disp, lin_disp, hits)
         return pd.DataFrame({
-            'world': w,
-            'ang_disp': ang_disp[w],
-            'lin_disp': lin_disp[w],
-            'hits': hits[w]
-        } for w in range(c.NUM_WORLDS))
+            'world': np.arange(c.NUM_WORLDS),
+            'ang_disp': ang_disp,
+            'lin_disp': lin_disp,
+            'hits': hits
+        })
 
     def step(self):
         self.view_and_react()

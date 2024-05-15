@@ -33,7 +33,7 @@ ti.init(arch=ti.cuda, default_fp=ti.f32, default_ip=ti.i32,
 # program. Don't attempt to delete these objects, as the GPU memory will not be
 # freed! Taichi makes it difficult to do otherwise.
 population_manager = PopulationManager()
-simulator = Simulator()
+simulator = Simulator() # debug=True)
 
 
 def summarize_single_experiment(experiment):
@@ -84,15 +84,16 @@ class Experiment:
     def run(self):
         print(f'Running {c.NUM_TRIALS} trials of {self.name} '
               f'with {c.NUM_WORLDS} parallel simulations:')
-        best_world_index, metrics, scores = coevolve(
+        best_world_index, logs = coevolve(
             simulator, population_manager, self.fitness)
         self.save_simulation(best_world_index)
-        self.save_logs(metrics, scores)
+        self.save_logs(logs)
         summarize_single_experiment(self)
 
-    def save_logs(self, metrics, scores):
-        metrics.to_csv(self.log_path('metrics'), index=False)
-        scores.to_csv(self.log_path('scores'), index=False)
+    def save_logs(self, logs):
+        logs.metrics.to_csv(self.log_path('metrics'), index=False)
+        logs.scores.to_csv(self.log_path('scores'), index=False)
+        logs.genealogy.to_csv(self.log_path('genealogy'), index=False)
 
     def get_scores(self):
         return pd.read_csv(self.log_path('scores'))
@@ -100,8 +101,7 @@ class Experiment:
     def save_simulation(self, world_index):
         def get_scores(metrics):
             return {
-                key: self.fitness[key](
-                    metrics[metrics['world'] == world_index]).iloc[0]
+                key: self.fitness[key](metrics).iloc[0]
                 for key in self.fitness
             }
         #visualize.show(simulator, world_index, get_scores)
