@@ -1,0 +1,11 @@
+This is my class project for Evolutionary Robotics, taught by Josh Bongard at
+UVM in 2024. The purpose of this project is just to serve as a prototype for
+future research, and a demo use case for my implementation of the NEAT
+algorithm.
+
+Running main.py kicks off a series of co-evolutionary experiments that
+co-evolve an environment (a topographic map of the world) and controllers for
+agents (rolling balls) that are randomly placed into that world. Both the
+topographies and controllers are evolved using NEAT. Several different
+coevolutionary dynamics are tested, and log files, sample videos, and charts of
+fitness growth are produced for each experiment.
